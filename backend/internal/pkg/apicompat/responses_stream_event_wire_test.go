@@ -56,13 +56,14 @@ func TestWire_MessageItemContentAlwaysArray(t *testing.T) {
 	m := marshalEvent(t, ResponsesStreamEvent{
 		Type:        "response.output_item.added",
 		OutputIndex: 0,
-		Item:        &ResponsesOutput{Type: "message", ID: "msg_1", Role: "assistant", Status: "in_progress"},
+		Item:        &ResponsesOutput{Type: "message", ID: "msg_1", Role: "assistant", Author: "agent-alpha", Status: "in_progress"},
 	})
 	item, ok := m["item"].(map[string]any)
 	require.True(t, ok, "item must be an object")
 	require.Contains(t, item, "content")
 	_, ok = item["content"].([]any)
 	require.True(t, ok, "content must be an array")
+	require.Equal(t, "agent-alpha", item["author"])
 }
 
 // TestWire_ReasoningItemSummaryAlwaysArray guards summary:[] presence.

@@ -77,9 +77,10 @@ func shouldStripOpenAIResponsesInputNamespaces(account *Account, transport OpenA
 //     故 OAuth 非 compact 请求必须保留。
 //   - compact 端点的 schema 不含该字段，携带即 400 `Unknown parameter:
 //     input[N].namespace`（issue #4761 正文），故 compact 一律清理。
-//   - API Key 出口是标准 Responses API（api.openai.com 或自定义 base_url），同样
-//     不认识该字段，维持全量清理；否则只能退化成
-//     openai_responses_rejected_field_retry 的逐项删除，6 次上限根本盖不住长历史。
+//   - API Key 出口也必须保留工具调用项上的 namespace。Codex 的 namespace 工具调用
+//     需要把 response.output 原样回填到下一轮 input；中转层删除该字段会破坏该
+//     回合链路。若某个兼容上游明确拒绝该字段，应由其专用兼容策略处理，不能在
+//     OpenAI Responses 公共路径上静默丢失身份信息。
 //   - 摊平模式下调用项已被改写成平名，残留 namespace 指向的声明已不存在，一律清理。
 func shouldKeepOpenAIResponsesToolCallNamespaces(
 	account *Account,
@@ -87,7 +88,7 @@ func shouldKeepOpenAIResponsesToolCallNamespaces(
 	passthroughEnabled bool,
 	compactPath bool,
 ) bool {
-	if account == nil || !account.IsOpenAIOAuth() {
+	if account == nil || (!account.IsOpenAIOAuth() && !account.IsOpenAIApiKey()) {
 		return false
 	}
 	if compactPath {

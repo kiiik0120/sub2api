@@ -92,8 +92,9 @@ func TestShouldKeepOpenAIResponsesToolCallNamespaces(t *testing.T) {
 		// WSv2 + compact 是唯一「不摊平但仍必须清理」的组合，钉住 compact 判定本身，
 		// 使其不会被误当成可由 shouldFlatten 推导出的冗余分支。
 		{name: "oauth_compact_wsv2_strips", account: oauth, transport: OpenAIUpstreamTransportResponsesWebsocketV2, compactPath: true, want: false},
-		// API Key 出口是标准 Responses API，不认识该字段。
-		{name: "apikey_strips", account: apiKey, transport: OpenAIUpstreamTransportHTTPSSE, want: false},
+		// API Key Responses 同样必须保留历史工具调用的 namespace，供 Codex
+		// 将 response.output 原样回填到下一轮 input。
+		{name: "apikey_keeps", account: apiKey, transport: OpenAIUpstreamTransportHTTPSSE, want: true},
 		{name: "setup_token_strips", account: setupToken, transport: OpenAIUpstreamTransportHTTPSSE, want: false},
 		{name: "nil_account", account: nil, transport: OpenAIUpstreamTransportHTTPSSE, want: false},
 	}

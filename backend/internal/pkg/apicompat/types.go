@@ -371,6 +371,10 @@ type ResponsesOutput struct {
 	// type=message
 	ID      string                 `json:"id,omitempty"`
 	Role    string                 `json:"role,omitempty"`
+	// Author identifies the originating agent for multi-agent message items.
+	// It must survive decode/encode so a later Responses input can retain
+	// the original agent attribution.
+	Author  string                 `json:"author,omitempty"`
 	Content []ResponsesContentPart `json:"content,omitempty"`
 	Status  string                 `json:"status,omitempty"`
 

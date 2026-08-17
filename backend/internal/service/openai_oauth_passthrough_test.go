@@ -2209,6 +2209,47 @@ func TestOpenAIGatewayService_APIKeyPassthrough_PreservesBodyAndUsesResponsesEnd
 	require.Empty(t, upstream.lastReq.Header.Get("X-Test"))
 }
 
+func TestOpenAIGatewayService_APIKeyResponsesPreservesNamespaceAndAgentAuthor(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
+	c.Request.Header.Set("User-Agent", "codex_cli_rs/test")
+
+	requestBody := []byte(`{
+		"model":"gpt-5.5","stream":false,
+		"input":[
+			{"type":"function_call","call_id":"call_1","name":"spawn_agent","namespace":"collaboration","author":"agent-alpha","arguments":"{}"},
+			{"type":"message","role":"assistant","author":"agent-beta","content":[{"type":"output_text","text":"done"}]}
+		]
+	}`)
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body: io.NopCloser(strings.NewReader(`{
+			"id":"resp_1","object":"response","model":"gpt-5.5","status":"completed",
+			"output":[{"type":"message","id":"msg_1","role":"assistant","author":"agent-gamma","content":[{"type":"output_text","text":"ok"}]}],
+			"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}
+		}`)),
+	}}
+	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	account := &Account{
+		ID: 1, Name: "responses", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 1,
+		Credentials: map[string]any{"api_key": "test-key", "base_url": "https://api.openai.com"},
+		Extra: map[string]any{openai_compat.ExtraKeyResponsesMode: string(openai_compat.ResponsesSupportModeForceResponses)},
+		Status: StatusActive, Schedulable: true, RateMultiplier: f64p(1),
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, requestBody)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "collaboration", gjson.GetBytes(upstream.lastBody, "input.0.namespace").String())
+	require.Equal(t, "agent-alpha", gjson.GetBytes(upstream.lastBody, "input.0.author").String())
+	require.Equal(t, "agent-beta", gjson.GetBytes(upstream.lastBody, "input.1.author").String())
+	require.Equal(t, "agent-gamma", gjson.Get(rec.Body.Bytes(), "output.0.author").String())
+}
+
 func TestOpenAIGatewayService_OAuthPassthrough_WarnOnTimeoutHeadersForStream(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	logSink, restore := captureStructuredLog(t)
