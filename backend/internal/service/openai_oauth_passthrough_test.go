@@ -2209,7 +2209,7 @@ func TestOpenAIGatewayService_APIKeyPassthrough_PreservesBodyAndUsesResponsesEnd
 	require.Empty(t, upstream.lastReq.Header.Get("X-Test"))
 }
 
-func TestOpenAIGatewayService_APIKeyResponsesPreservesNamespaceAndAgentAuthor(t *testing.T) {
+func TestOpenAIGatewayService_APIKeyResponsesPreservesNamespaceAndStripsInputAgentAuthor(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
@@ -2245,8 +2245,8 @@ func TestOpenAIGatewayService_APIKeyResponsesPreservesNamespaceAndAgentAuthor(t 
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, "collaboration", gjson.GetBytes(upstream.lastBody, "input.0.namespace").String())
-	require.Equal(t, "agent-alpha", gjson.GetBytes(upstream.lastBody, "input.0.author").String())
-	require.Equal(t, "agent-beta", gjson.GetBytes(upstream.lastBody, "input.1.author").String())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "input.0.author").Exists())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "input.1.author").Exists())
 	require.Equal(t, "agent-gamma", gjson.GetBytes(rec.Body.Bytes(), "output.0.author").String())
 }
 

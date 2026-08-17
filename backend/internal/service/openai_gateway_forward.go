@@ -118,11 +118,18 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 		if changed {
 			body = sanitizedBody
-			originalBody = sanitizedBody
-			requestView = newOpenAIRequestView(sanitizedBody)
-			reqModel, reqStream, promptCacheKey = requestView.Model, requestView.Stream, requestView.PromptCacheKey
-			originalModel = reqModel
 		}
+		sanitizedBody, changed, sanitizeErr = stripOpenAIResponsesInputAuthors(body)
+		if sanitizeErr != nil {
+			return nil, fmt.Errorf("sanitize OpenAI Responses input authors: %w", sanitizeErr)
+		}
+		if changed {
+			body = sanitizedBody
+		}
+		originalBody = body
+		requestView = newOpenAIRequestView(body)
+		reqModel, reqStream, promptCacheKey = requestView.Model, requestView.Stream, requestView.PromptCacheKey
+		originalModel = reqModel
 	}
 
 	compatMessagesBridge := isOpenAICompatMessagesBridgeBody(body)
