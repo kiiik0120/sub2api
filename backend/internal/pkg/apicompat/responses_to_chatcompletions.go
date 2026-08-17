@@ -443,6 +443,7 @@ func generateChatCmplID() string {
 type bufferedFuncCall struct {
 	CallID string
 	Name   string
+	Author string
 	Args   strings.Builder
 }
 
@@ -451,7 +452,9 @@ type bufferedFuncCall struct {
 // (response.completed / response.done) carries an empty output array.
 type BufferedResponseAccumulator struct {
 	text                 strings.Builder
+	messageAuthor        string
 	reasoning            strings.Builder
+	reasoningAuthor      string
 	funcCalls            []bufferedFuncCall
 	outputIndexToFuncIdx map[int]int
 }
@@ -473,12 +476,21 @@ func (a *BufferedResponseAccumulator) ProcessEvent(event *ResponsesStreamEvent) 
 			_, _ = a.text.WriteString(event.Delta)
 		}
 	case "response.output_item.added":
-		if event.Item != nil && (event.Item.Type == "function_call" || event.Item.Type == "custom_tool_call") {
+		if event.Item == nil {
+			return
+		}
+		switch event.Item.Type {
+		case "message":
+			a.messageAuthor = event.Item.Author
+		case "reasoning":
+			a.reasoningAuthor = event.Item.Author
+		case "function_call", "custom_tool_call":
 			idx := len(a.funcCalls)
 			a.outputIndexToFuncIdx[event.OutputIndex] = idx
 			a.funcCalls = append(a.funcCalls, bufferedFuncCall{
 				CallID: event.Item.CallID,
 				Name:   event.Item.Name,
+				Author: event.Item.Author,
 			})
 		}
 	case "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
@@ -507,7 +519,8 @@ func (a *BufferedResponseAccumulator) BuildOutput() []ResponsesOutput {
 
 	if a.reasoning.Len() > 0 {
 		out = append(out, ResponsesOutput{
-			Type: "reasoning",
+			Type:   "reasoning",
+			Author: a.reasoningAuthor,
 			Summary: []ResponsesSummary{{
 				Type: "summary_text",
 				Text: a.reasoning.String(),
@@ -517,8 +530,9 @@ func (a *BufferedResponseAccumulator) BuildOutput() []ResponsesOutput {
 
 	if a.text.Len() > 0 {
 		out = append(out, ResponsesOutput{
-			Type: "message",
-			Role: "assistant",
+			Type:   "message",
+			Role:   "assistant",
+			Author: a.messageAuthor,
 			Content: []ResponsesContentPart{{
 				Type: "output_text",
 				Text: a.text.String(),
@@ -531,6 +545,7 @@ func (a *BufferedResponseAccumulator) BuildOutput() []ResponsesOutput {
 			Type:      "function_call",
 			CallID:    a.funcCalls[i].CallID,
 			Name:      a.funcCalls[i].Name,
+			Author:    a.funcCalls[i].Author,
 			Arguments: a.funcCalls[i].Args.String(),
 		})
 	}

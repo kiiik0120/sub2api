@@ -1548,6 +1548,36 @@ func TestBufferedResponseAccumulator_ToolCalls(t *testing.T) {
 	assert.Equal(t, `{"city":"NYC"}`, output[0].Arguments)
 }
 
+func TestBufferedResponseAccumulator_PreservesAgentAuthors(t *testing.T) {
+	acc := NewBufferedResponseAccumulator()
+	acc.ProcessEvent(&ResponsesStreamEvent{
+		Type:        "response.output_item.added",
+		OutputIndex: 0,
+		Item:        &ResponsesOutput{Type: "message", Author: "agent-message"},
+	})
+	acc.ProcessEvent(&ResponsesStreamEvent{Type: "response.output_text.delta", Delta: "done"})
+	acc.ProcessEvent(&ResponsesStreamEvent{
+		Type:        "response.output_item.added",
+		OutputIndex: 1,
+		Item: &ResponsesOutput{
+			Type:   "function_call",
+			CallID: "call_1",
+			Name:   "spawn_agent",
+			Author: "agent-tool",
+		},
+	})
+	acc.ProcessEvent(&ResponsesStreamEvent{
+		Type:        "response.function_call_arguments.delta",
+		OutputIndex: 1,
+		Delta:       `{}`,
+	})
+
+	output := acc.BuildOutput()
+	require.Len(t, output, 2)
+	require.Equal(t, "agent-message", output[0].Author)
+	require.Equal(t, "agent-tool", output[1].Author)
+}
+
 func TestBufferedResponseAccumulator_Reasoning(t *testing.T) {
 	acc := NewBufferedResponseAccumulator()
 

@@ -251,6 +251,7 @@ type ResponsesInputItem struct {
 
 	// Role-based messages (developer/system/user/assistant)
 	Role    string          `json:"role,omitempty"`
+	Author  string          `json:"author,omitempty"`
 	Content json.RawMessage `json:"content,omitempty"` // string or []ResponsesContentPart
 
 	// type=reasoning (multi-turn replay of encrypted reasoning)
@@ -367,14 +368,14 @@ type ResponsesIncompleteDetails struct {
 // ResponsesOutput is one output item in a Responses API response.
 type ResponsesOutput struct {
 	Type string `json:"type"` // "message" | "reasoning" | "function_call" | "web_search_call"
+	// Author identifies the originating agent for multi-agent output items.
+	// It must survive decode/encode so a later Responses input can retain
+	// the original agent attribution.
+	Author string `json:"author,omitempty"`
 
 	// type=message
 	ID      string                 `json:"id,omitempty"`
 	Role    string                 `json:"role,omitempty"`
-	// Author identifies the originating agent for multi-agent message items.
-	// It must survive decode/encode so a later Responses input can retain
-	// the original agent attribution.
-	Author  string                 `json:"author,omitempty"`
 	Content []ResponsesContentPart `json:"content,omitempty"`
 	Status  string                 `json:"status,omitempty"`
 
@@ -414,6 +415,9 @@ func (o ResponsesOutput) MarshalJSON() ([]byte, error) {
 	}
 	if o.Status != "" {
 		m["status"] = o.Status
+	}
+	if o.Author != "" {
+		m["author"] = o.Author
 	}
 	return json.Marshal(m)
 }

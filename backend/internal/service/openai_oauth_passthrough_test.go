@@ -2237,8 +2237,8 @@ func TestOpenAIGatewayService_APIKeyResponsesPreservesNamespaceAndAgentAuthor(t 
 	account := &Account{
 		ID: 1, Name: "responses", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 1,
 		Credentials: map[string]any{"api_key": "test-key", "base_url": "https://api.openai.com"},
-		Extra: map[string]any{openai_compat.ExtraKeyResponsesMode: string(openai_compat.ResponsesSupportModeForceResponses)},
-		Status: StatusActive, Schedulable: true, RateMultiplier: f64p(1),
+		Extra:       map[string]any{openai_compat.ExtraKeyResponsesMode: string(openai_compat.ResponsesSupportModeForceResponses)},
+		Status:      StatusActive, Schedulable: true, RateMultiplier: f64p(1),
 	}
 
 	result, err := svc.Forward(context.Background(), c, account, requestBody)
@@ -2247,7 +2247,7 @@ func TestOpenAIGatewayService_APIKeyResponsesPreservesNamespaceAndAgentAuthor(t 
 	require.Equal(t, "collaboration", gjson.GetBytes(upstream.lastBody, "input.0.namespace").String())
 	require.Equal(t, "agent-alpha", gjson.GetBytes(upstream.lastBody, "input.0.author").String())
 	require.Equal(t, "agent-beta", gjson.GetBytes(upstream.lastBody, "input.1.author").String())
-	require.Equal(t, "agent-gamma", gjson.Get(rec.Body.Bytes(), "output.0.author").String())
+	require.Equal(t, "agent-gamma", gjson.GetBytes(rec.Body.Bytes(), "output.0.author").String())
 }
 
 func TestOpenAIGatewayService_OAuthPassthrough_WarnOnTimeoutHeadersForStream(t *testing.T) {

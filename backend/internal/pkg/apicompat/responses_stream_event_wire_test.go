@@ -41,7 +41,7 @@ func TestWire_FunctionCallItemAlwaysComplete(t *testing.T) {
 	added := marshalEvent(t, ResponsesStreamEvent{
 		Type:        "response.output_item.added",
 		OutputIndex: 1,
-		Item:        &ResponsesOutput{Type: "function_call", ID: "fc_1", CallID: "call_a", Name: "exec", Status: "in_progress"},
+		Item:        &ResponsesOutput{Type: "function_call", ID: "fc_1", CallID: "call_a", Name: "exec", Author: "agent-alpha", Status: "in_progress"},
 	})
 	item, ok := added["item"].(map[string]any)
 	require.True(t, ok, "item must be an object")
@@ -49,6 +49,7 @@ func TestWire_FunctionCallItemAlwaysComplete(t *testing.T) {
 		require.Containsf(t, item, k, "function_call item missing %q", k)
 	}
 	require.Equal(t, "", item["arguments"])
+	require.Equal(t, "agent-alpha", item["author"])
 }
 
 // TestWire_MessageItemContentAlwaysArray guards content:[] presence.
@@ -139,11 +140,13 @@ func TestResponsesOutputUnmarshal_ToolSearchObjectArguments(t *testing.T) {
 		"type":"tool_search_call",
 		"id":"item_1",
 		"call_id":"call_1",
+		"author":"agent-search",
 		"execution":"client",
 		"arguments":{"query":"gmail","limit":2}
 	}`), &item))
 	require.Equal(t, "tool_search_call", item.Type)
 	require.Equal(t, `{"query":"gmail","limit":2}`, item.Arguments)
+	require.Equal(t, "agent-search", item.Author)
 
 	wire, err := json.Marshal(item)
 	require.NoError(t, err)
@@ -152,6 +155,27 @@ func TestResponsesOutputUnmarshal_ToolSearchObjectArguments(t *testing.T) {
 	args, ok := decoded["arguments"].(map[string]any)
 	require.True(t, ok, "tool_search_call arguments must remain an object")
 	require.Equal(t, "gmail", args["query"])
+	require.Equal(t, "agent-search", decoded["author"])
+}
+
+func TestResponsesInputItemRoundTripPreservesAuthor(t *testing.T) {
+	var item ResponsesInputItem
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"type":"message",
+		"role":"assistant",
+		"author":"agent-history",
+		"content":[]
+	}`), &item))
+	require.Equal(t, "agent-history", item.Author)
+
+	wire, err := json.Marshal(item)
+	require.NoError(t, err)
+	require.JSONEq(t, `{
+		"type":"message",
+		"role":"assistant",
+		"author":"agent-history",
+		"content":[]
+	}`, string(wire))
 }
 
 func TestResponsesResponseUnmarshal_ToolSearchObjectArguments(t *testing.T) {
