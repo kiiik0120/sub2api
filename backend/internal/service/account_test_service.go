@@ -104,9 +104,10 @@ const (
 	grokRealtimeProbeTimeout     = 12 * time.Second
 )
 
-// isOpenAIImageModel checks if the model is an OpenAI image generation model (e.g. gpt-image-2).
+// isOpenAIImageModel checks whether an OpenAI-compatible account model uses
+// the standalone Images API (for example gpt-image or Doubao Seedream).
 func isOpenAIImageModel(model string) bool {
-	return strings.HasPrefix(strings.ToLower(model), "gpt-image-")
+	return isOpenAIImageGenerationModel(model)
 }
 
 func isGrokVideoGenerationModel(model string) bool {
