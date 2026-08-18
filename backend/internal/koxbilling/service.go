@@ -1,0 +1,378 @@
+// Package koxbilling owns the durable Sub2API-to-Kox billing boundary.
+package koxbilling
+
+import (
+	"bytes"
+	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+const (
+	internalAPIKeyEnv = "KOX_BILLING_INTERNAL_API_KEY"
+	webhookSecretEnv  = "SUB2API_WEBHOOK_SECRET"
+	webhookURLEnv     = "SUB2API_WEBHOOK_URL"
+)
+
+type Service struct {
+	db                                     *sql.DB
+	internalKey, webhookSecret, webhookURL string
+	client                                 *http.Client
+}
+type CreateKeyInput struct {
+	KoxCompanyID string `json:"kox_company_id"`
+	KoxUserID    string `json:"kox_user_id"`
+}
+type UsageInput struct {
+	APIKeyID          string         `json:"api_key_id"`
+	ProviderRequestID string         `json:"provider_request_id"`
+	RequestID         string         `json:"request_id"`
+	ReservationID     string         `json:"reservation_id"`
+	BusinessCode      string         `json:"business_code"`
+	Model             string         `json:"model"`
+	BillingType       string         `json:"billing_type"`
+	ActualCost        string         `json:"actual_cost"`
+	Currency          string         `json:"currency"`
+	Status            string         `json:"status"`
+	InputTokens       int            `json:"input_tokens"`
+	OutputTokens      int            `json:"output_tokens"`
+	CacheReadTokens   int            `json:"cache_read_tokens"`
+	CacheWriteTokens  int            `json:"cache_write_tokens"`
+	OccurredAt        time.Time      `json:"occurred_at"`
+	Metadata          map[string]any `json:"metadata"`
+}
+type Key struct{ ID, AccountID, KoxUserID, Fingerprint, Status string }
+type Usage struct {
+	UsageLogID       string          `json:"usage_log_id"`
+	APIKeyID         string          `json:"api_key_id"`
+	RequestID        string          `json:"request_id"`
+	ReservationID    string          `json:"reservation_id"`
+	BusinessCode     string          `json:"business_code"`
+	Model            string          `json:"model"`
+	BillingType      string          `json:"billing_type"`
+	Revision         int             `json:"revision"`
+	InputTokens      int             `json:"input_tokens"`
+	OutputTokens     int             `json:"output_tokens"`
+	CacheReadTokens  int             `json:"cache_read_tokens"`
+	CacheWriteTokens int             `json:"cache_write_tokens"`
+	ActualCost       string          `json:"actual_cost"`
+	Currency         string          `json:"currency"`
+	Status           string          `json:"status"`
+	OccurredAt       time.Time       `json:"occurred_at"`
+	Metadata         json.RawMessage `json:"metadata"`
+}
+
+func New(db *sql.DB) *Service {
+	return &Service{db: db, internalKey: strings.TrimSpace(os.Getenv(internalAPIKeyEnv)), webhookSecret: strings.TrimSpace(os.Getenv(webhookSecretEnv)), webhookURL: strings.TrimSpace(os.Getenv(webhookURLEnv)), client: &http.Client{Timeout: 10 * time.Second}}
+}
+
+func (s *Service) Enabled() bool { return s != nil && s.db != nil && s.internalKey != "" }
+func (s *Service) Authorize(value string) bool {
+	if !s.Enabled() {
+		return false
+	}
+	value = strings.TrimSpace(strings.TrimPrefix(value, "Bearer "))
+	return hmac.Equal([]byte(value), []byte(s.internalKey))
+}
+
+func (s *Service) CreateKey(ctx context.Context, in CreateKeyInput) (Key, string, error) {
+	if strings.TrimSpace(in.KoxCompanyID) == "" || strings.TrimSpace(in.KoxUserID) == "" {
+		return Key{}, "", errors.New("kox_company_id and kox_user_id are required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Key{}, "", err
+	}
+	defer tx.Rollback()
+	accountID := uuid.NewString()
+	if _, err = tx.ExecContext(ctx, `INSERT INTO kox_service_accounts(account_id,kox_company_id) VALUES($1,$2) ON CONFLICT(kox_company_id) DO UPDATE SET updated_at=NOW()`, accountID, in.KoxCompanyID); err != nil {
+		return Key{}, "", err
+	}
+	if err = tx.QueryRowContext(ctx, `SELECT account_id FROM kox_service_accounts WHERE kox_company_id=$1`, in.KoxCompanyID).Scan(&accountID); err != nil {
+		return Key{}, "", err
+	}
+	plain, err := randomKey()
+	if err != nil {
+		return Key{}, "", err
+	}
+	digest := digestKey(plain)
+	id := uuid.NewString()
+	fingerprint := keyFingerprint(plain)
+	_, err = tx.ExecContext(ctx, `INSERT INTO kox_api_keys(api_key_id,account_id,kox_user_id,key_digest,key_fingerprint) VALUES($1,$2,$3,$4,$5)`, id, accountID, in.KoxUserID, digest, fingerprint)
+	if err != nil {
+		return Key{}, "", err
+	}
+	if err = tx.Commit(); err != nil {
+		return Key{}, "", err
+	}
+	return Key{ID: id, AccountID: accountID, KoxUserID: in.KoxUserID, Fingerprint: fingerprint, Status: "active"}, plain, nil
+}
+
+func (s *Service) ListKeys(ctx context.Context, accountID, userID string) ([]Key, error) {
+	q := `SELECT api_key_id,account_id,kox_user_id,key_fingerprint,status FROM kox_api_keys WHERE 1=1`
+	args := []any{}
+	if accountID != "" {
+		args = append(args, accountID)
+		q += fmt.Sprintf(" AND account_id=$%d", len(args))
+	}
+	if userID != "" {
+		args = append(args, userID)
+		q += fmt.Sprintf(" AND kox_user_id=$%d", len(args))
+	}
+	q += " ORDER BY created_at DESC"
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Key{}
+	for rows.Next() {
+		var k Key
+		if err := rows.Scan(&k.ID, &k.AccountID, &k.KoxUserID, &k.Fingerprint, &k.Status); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+func (s *Service) Disable(ctx context.Context, id string) error {
+	return s.setKeyStatus(ctx, id, "disabled")
+}
+func (s *Service) Rotate(ctx context.Context, id string) (Key, string, error) {
+	var company, user string
+	err := s.db.QueryRowContext(ctx, `SELECT a.kox_company_id,k.kox_user_id FROM kox_api_keys k JOIN kox_service_accounts a ON a.account_id=k.account_id WHERE k.api_key_id=$1`, id).Scan(&company, &user)
+	if err != nil {
+		return Key{}, "", err
+	}
+	if err = s.setKeyStatus(ctx, id, "rotated"); err != nil {
+		return Key{}, "", err
+	}
+	return s.CreateKey(ctx, CreateKeyInput{company, user})
+}
+func (s *Service) setKeyStatus(ctx context.Context, id, status string) error {
+	r, e := s.db.ExecContext(ctx, `UPDATE kox_api_keys SET status=$2,disabled_at=NOW() WHERE api_key_id=$1 AND status='active'`, id, status)
+	if e != nil {
+		return e
+	}
+	n, _ := r.RowsAffected()
+	if n != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// RecordUsage is the only write path for Kox usage.  The event payload is
+// marshalled once and those exact bytes are used by the delivery worker.
+func (s *Service) RecordUsage(ctx context.Context, in UsageInput) (string, error) {
+	if err := validateUsage(in); err != nil {
+		return "", err
+	}
+	if in.OccurredAt.IsZero() {
+		in.OccurredAt = time.Now().UTC()
+	}
+	if in.Metadata == nil {
+		in.Metadata = map[string]any{}
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	var active bool
+	if err := tx.QueryRowContext(ctx, `SELECT TRUE FROM kox_api_keys WHERE api_key_id=$1 AND status='active'`, in.APIKeyID).Scan(&active); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", errors.New("api key is not active")
+		}
+		return "", err
+	}
+	var usageID string
+	var revision int
+	err = tx.QueryRowContext(ctx, `SELECT usage_log_id,revision FROM kox_usage_logs WHERE provider_request_id=$1 FOR UPDATE`, in.ProviderRequestID).Scan(&usageID, &revision)
+	if errors.Is(err, sql.ErrNoRows) {
+		usageID = uuid.NewString()
+		revision = 1
+		_, err = tx.ExecContext(ctx, `INSERT INTO kox_usage_logs(usage_log_id,api_key_id,provider_request_id,request_id,reservation_id,business_code,model,billing_type,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,actual_cost,currency,status,occurred_at,revision,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`, usageID, in.APIKeyID, in.ProviderRequestID, in.RequestID, in.ReservationID, in.BusinessCode, in.Model, in.BillingType, in.InputTokens, in.OutputTokens, in.CacheReadTokens, in.CacheWriteTokens, in.ActualCost, in.Currency, in.Status, in.OccurredAt, revision, in.Metadata)
+	} else if err == nil {
+		revision++
+		_, err = tx.ExecContext(ctx, `UPDATE kox_usage_logs SET request_id=$2,reservation_id=$3,business_code=$4,model=$5,billing_type=$6,input_tokens=$7,output_tokens=$8,cache_read_tokens=$9,cache_write_tokens=$10,actual_cost=$11,currency=$12,status=$13,occurred_at=$14,revision=$15,metadata=$16,updated_at=NOW() WHERE usage_log_id=$1`, usageID, in.RequestID, in.ReservationID, in.BusinessCode, in.Model, in.BillingType, in.InputTokens, in.OutputTokens, in.CacheReadTokens, in.CacheWriteTokens, in.ActualCost, in.Currency, in.Status, in.OccurredAt, revision, in.Metadata)
+	}
+	if err != nil {
+		return "", err
+	}
+	payload := map[string]any{"event_id": uuid.NewString(), "usage_log_id": usageID, "revision": revision, "reservation_id": in.ReservationID, "external_call_id": in.RequestID, "api_key_id": in.APIKeyID, "business_code": in.BusinessCode, "model": in.Model, "billing_type": in.BillingType, "input_tokens": in.InputTokens, "output_tokens": in.OutputTokens, "cache_read_tokens": in.CacheReadTokens, "cache_write_tokens": in.CacheWriteTokens, "actual_cost": in.ActualCost, "currency": in.Currency, "status": in.Status, "occurred_at": in.OccurredAt.UTC().Format(time.RFC3339Nano), "metadata": in.Metadata}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	eventID := payload["event_id"].(string)
+	_, err = tx.ExecContext(ctx, `INSERT INTO kox_billing_outbox(event_id,usage_log_id,revision,payload) VALUES($1,$2,$3,$4)`, eventID, usageID, revision, raw)
+	if err != nil {
+		return "", err
+	}
+	if err = tx.Commit(); err != nil {
+		return "", err
+	}
+	return usageID, nil
+}
+
+func (s *Service) DeliverDue(ctx context.Context, limit int) error {
+	if s.webhookURL == "" || s.webhookSecret == "" {
+		return nil
+	}
+	if limit < 1 {
+		limit = 20
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT event_id,payload,attempts FROM kox_billing_outbox WHERE delivery_status='pending' AND next_attempt_at<=NOW() ORDER BY created_at LIMIT $1 FOR UPDATE SKIP LOCKED`, limit)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var raw []byte
+		var attempts int
+		if err := rows.Scan(&id, &raw, &attempts); err != nil {
+			return err
+		}
+		s.deliver(ctx, id, raw, attempts)
+	}
+	return rows.Err()
+}
+func (s *Service) deliver(ctx context.Context, id string, raw []byte, attempts int) {
+	now := time.Now().UTC()
+	timestamp := fmt.Sprint(now.Unix())
+	mac := hmac.New(sha256.New, []byte(s.webhookSecret))
+	_, _ = mac.Write([]byte(timestamp + "."))
+	_, _ = mac.Write(raw)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.webhookURL, bytes.NewReader(raw))
+	if err == nil {
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Sub2API-Timestamp", timestamp)
+		req.Header.Set("X-Sub2API-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+		var resp *http.Response
+		resp, err = s.client.Do(req)
+		if resp != nil {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			_ = resp.Body.Close()
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				_, _ = s.db.ExecContext(ctx, `UPDATE kox_billing_outbox SET delivery_status='delivered',attempts=attempts+1,first_attempted_at=COALESCE(first_attempted_at,NOW()),last_attempted_at=NOW(),completed_at=NOW(),last_response=$2 WHERE event_id=$1`, id, string(body))
+				return
+			}
+			if resp.StatusCode == 401 {
+				_, _ = s.db.ExecContext(ctx, `UPDATE kox_billing_outbox SET delivery_status='blocked',last_error=$2,last_response=$3,last_attempted_at=NOW() WHERE event_id=$1`, id, "webhook returned 401", string(body))
+				return
+			}
+			if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != 429 {
+				_, _ = s.db.ExecContext(ctx, `UPDATE kox_billing_outbox SET delivery_status='dead_letter',last_error=$2,last_response=$3,last_attempted_at=NOW() WHERE event_id=$1`, id, fmt.Sprintf("webhook returned %d", resp.StatusCode), string(body))
+				return
+			}
+			err = fmt.Errorf("webhook returned %d", resp.StatusCode)
+		}
+	}
+	delay := time.Duration(1<<min(attempts, 8)) * time.Second
+	_, _ = s.db.ExecContext(ctx, `UPDATE kox_billing_outbox SET attempts=attempts+1,first_attempted_at=COALESCE(first_attempted_at,NOW()),last_attempted_at=NOW(),next_attempt_at=NOW()+($2 * INTERVAL '1 second'),last_error=$3 WHERE event_id=$1`, id, int(delay.Seconds()), errorText(err))
+}
+func (s *Service) Replay(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE kox_billing_outbox SET delivery_status='pending',next_attempt_at=NOW(),last_error=NULL,claimed_at=NULL,claimed_by=NULL WHERE event_id=$1 AND delivery_status IN ('dead_letter','blocked')`, id)
+	return err
+}
+func (s *Service) Usage(ctx context.Context, requestID, apiKeyID string, from, to time.Time) ([]Usage, error) {
+	q := `SELECT usage_log_id,api_key_id,request_id,reservation_id,business_code,model,billing_type,revision,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,actual_cost::text,currency,status,occurred_at,metadata FROM kox_usage_logs WHERE 1=1`
+	args := []any{}
+	if requestID != "" {
+		args = append(args, requestID)
+		q += fmt.Sprintf(" AND request_id=$%d", len(args))
+	}
+	if apiKeyID != "" {
+		args = append(args, apiKeyID)
+		q += fmt.Sprintf(" AND api_key_id=$%d", len(args))
+	}
+	if !from.IsZero() {
+		args = append(args, from)
+		q += fmt.Sprintf(" AND occurred_at >= $%d", len(args))
+	}
+	if !to.IsZero() {
+		args = append(args, to)
+		q += fmt.Sprintf(" AND occurred_at <= $%d", len(args))
+	}
+	q += " ORDER BY occurred_at ASC"
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Usage{}
+	for rows.Next() {
+		var u Usage
+		if err := rows.Scan(&u.UsageLogID, &u.APIKeyID, &u.RequestID, &u.ReservationID, &u.BusinessCode, &u.Model, &u.BillingType, &u.Revision, &u.InputTokens, &u.OutputTokens, &u.CacheReadTokens, &u.CacheWriteTokens, &u.ActualCost, &u.Currency, &u.Status, &u.OccurredAt, &u.Metadata); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+func (s *Service) Start(ctx context.Context) {
+	if !s.Enabled() || s.webhookURL == "" || s.webhookSecret == "" {
+		return
+	}
+	go func() {
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				_ = s.DeliverDue(ctx, 20)
+			}
+		}
+	}()
+}
+func randomKey() (string, error) {
+	b := make([]byte, 32)
+	if _, e := rand.Read(b); e != nil {
+		return "", e
+	}
+	return "kox_" + hex.EncodeToString(b), nil
+}
+func digestKey(k string) string { h := sha256.Sum256([]byte(k)); return hex.EncodeToString(h[:]) }
+func keyFingerprint(k string) string {
+	h := sha256.Sum256([]byte(k))
+	return "kox_" + hex.EncodeToString(h[:6])
+}
+func errorText(e error) string {
+	if e == nil {
+		return "delivery failed"
+	}
+	return e.Error()
+}
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+func validateUsage(in UsageInput) error {
+	for _, v := range []string{in.APIKeyID, in.ProviderRequestID, in.RequestID, in.ReservationID, in.BusinessCode, in.Model, in.ActualCost, in.Currency, in.Status} {
+		if strings.TrimSpace(v) == "" {
+			return errors.New("missing required usage field")
+		}
+	}
+	if len(in.Currency) != 3 {
+		return errors.New("currency must be ISO-4217")
+	}
+	return nil
+}
