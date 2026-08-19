@@ -77,6 +77,7 @@ services:
       - 'GATEWAY_IMAGE_CONCURRENCY_MAX_WAITING_REQUESTS=100'
       - 'KOX_BILLING_INTERNAL_API_KEY=C9CBfQJ3PCyiqoyqN6FryPM52FLwak'
       - 'KOX_GATEWAY_USER_ID=1'
+      - 'KOX_GATEWAY_GROUP_ID=${KOX_GATEWAY_GROUP_ID:?set KOX_GATEWAY_GROUP_ID}'
       - 'SUB2API_WEBHOOK_URL=http://host.docker.internal:8013/internal/ai-billing/sub2api/events'
       - 'SUB2API_WEBHOOK_SECRET=Z4h1ajPkJeQ04XCfjm17YbHQT5uEv79k'
     healthcheck:

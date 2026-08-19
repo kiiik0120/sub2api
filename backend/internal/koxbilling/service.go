@@ -27,12 +27,13 @@ const (
 	webhookSecretEnv  = "SUB2API_WEBHOOK_SECRET"
 	webhookURLEnv     = "SUB2API_WEBHOOK_URL"
 	gatewayUserIDEnv  = "KOX_GATEWAY_USER_ID"
+	gatewayGroupIDEnv = "KOX_GATEWAY_GROUP_ID"
 )
 
 type Service struct {
 	db                                     *sql.DB
 	internalKey, webhookSecret, webhookURL string
-	gatewayUserID                          int64
+	gatewayUserID, gatewayGroupID           int64
 	client                                 *http.Client
 }
 type CreateKeyInput struct {
@@ -80,10 +81,11 @@ type Usage struct {
 
 func New(db *sql.DB) *Service {
 	userID, _ := strconv.ParseInt(strings.TrimSpace(os.Getenv(gatewayUserIDEnv)), 10, 64)
-	return &Service{db: db, internalKey: strings.TrimSpace(os.Getenv(internalAPIKeyEnv)), webhookSecret: strings.TrimSpace(os.Getenv(webhookSecretEnv)), webhookURL: strings.TrimSpace(os.Getenv(webhookURLEnv)), gatewayUserID: userID, client: &http.Client{Timeout: 10 * time.Second}}
+	groupID, _ := strconv.ParseInt(strings.TrimSpace(os.Getenv(gatewayGroupIDEnv)), 10, 64)
+	return &Service{db: db, internalKey: strings.TrimSpace(os.Getenv(internalAPIKeyEnv)), webhookSecret: strings.TrimSpace(os.Getenv(webhookSecretEnv)), webhookURL: strings.TrimSpace(os.Getenv(webhookURLEnv)), gatewayUserID: userID, gatewayGroupID: groupID, client: &http.Client{Timeout: 10 * time.Second}}
 }
 
-func (s *Service) Enabled() bool { return s != nil && s.db != nil && s.internalKey != "" && s.gatewayUserID > 0 }
+func (s *Service) Enabled() bool { return s != nil && s.db != nil && s.internalKey != "" && s.gatewayUserID > 0 && s.gatewayGroupID > 0 }
 func (s *Service) Authorize(value string) bool {
 	if !s.Enabled() {
 		return false
@@ -108,6 +110,27 @@ func (s *Service) CreateKey(ctx context.Context, in CreateKeyInput) (Key, string
 	if err = tx.QueryRowContext(ctx, `SELECT account_id FROM kox_service_accounts WHERE kox_company_id=$1`, in.KoxCompanyID).Scan(&accountID); err != nil {
 		return Key{}, "", err
 	}
+	// Creation is retried by the Kox outbox and may arrive concurrently. Keep
+	// exactly one active gateway key for a company/user pair.
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, in.KoxCompanyID, in.KoxUserID); err != nil {
+		return Key{}, "", err
+	}
+	var existing Key
+	var existingPlain string
+	err = tx.QueryRowContext(ctx, `SELECT k.api_key_id,k.account_id,k.kox_user_id,k.key_fingerprint,k.status,g.key
+		FROM kox_api_keys k JOIN api_keys g ON g.id=k.gateway_api_key_id
+		WHERE k.account_id=$1 AND k.kox_user_id=$2 AND k.status='active'
+		  AND g.status='active' AND g.group_id IS NOT NULL AND g.deleted_at IS NULL`, accountID, in.KoxUserID).
+		Scan(&existing.ID, &existing.AccountID, &existing.KoxUserID, &existing.Fingerprint, &existing.Status, &existingPlain)
+	if err == nil {
+		if err = tx.Commit(); err != nil {
+			return Key{}, "", err
+		}
+		return existing, existingPlain, nil
+	}
+	if err != sql.ErrNoRows {
+		return Key{}, "", err
+	}
 	plain, err := randomKey()
 	if err != nil {
 		return Key{}, "", err
@@ -116,7 +139,7 @@ func (s *Service) CreateKey(ctx context.Context, in CreateKeyInput) (Key, string
 	id := uuid.NewString()
 	fingerprint := keyFingerprint(plain)
 	var gatewayKeyID int64
-	if err = tx.QueryRowContext(ctx, `INSERT INTO api_keys(user_id,key,name,status) VALUES($1,$2,$3,'active') RETURNING id`, s.gatewayUserID, plain, "kox:"+in.KoxCompanyID+":"+in.KoxUserID).Scan(&gatewayKeyID); err != nil {
+	if err = tx.QueryRowContext(ctx, `INSERT INTO api_keys(user_id,key,name,group_id,status) VALUES($1,$2,$3,$4,'active') RETURNING id`, s.gatewayUserID, plain, "kox:"+in.KoxCompanyID+":"+in.KoxUserID, s.gatewayGroupID).Scan(&gatewayKeyID); err != nil {
 		return Key{}, "", err
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO kox_api_keys(api_key_id,account_id,kox_user_id,key_digest,key_fingerprint,gateway_api_key_id) VALUES($1,$2,$3,$4,$5,$6)`, id, accountID, in.KoxUserID, digest, fingerprint, gatewayKeyID)
@@ -161,7 +184,7 @@ func (s *Service) Credential(ctx context.Context, id string) (Key, string, error
 	var plain string
 	err := s.db.QueryRowContext(ctx, `SELECT k.api_key_id,k.account_id,k.kox_user_id,k.key_fingerprint,k.status,g.key
 		FROM kox_api_keys k JOIN api_keys g ON g.id=k.gateway_api_key_id
-		WHERE k.api_key_id=$1 AND k.status='active' AND g.status='active' AND g.deleted_at IS NULL`, id).
+		WHERE k.api_key_id=$1 AND k.status='active' AND g.status='active' AND g.group_id IS NOT NULL AND g.deleted_at IS NULL`, id).
 		Scan(&key.ID, &key.AccountID, &key.KoxUserID, &key.Fingerprint, &key.Status, &plain)
 	if err != nil {
 		return Key{}, "", err
