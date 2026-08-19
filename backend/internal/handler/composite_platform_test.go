@@ -22,6 +22,23 @@ func TestCompositeTargetPlatformAllowedResolvesKnownAllowedModel(t *testing.T) {
 	require.Equal(t, service.PlatformOpenAI, platform)
 }
 
+func TestCompositeTargetPlatformAllowedResolvesDoubaoImageModels(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	for _, model := range []string{"doubao-seedream-4-0-250828", "seedream-4-0-250828"} {
+		t.Run(model, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest("POST", "/v1/images/generations", nil)
+			apiKey := &service.APIKey{Group: &service.Group{Platform: service.PlatformComposite}}
+
+			require.True(t, compositeTargetPlatformAllowed(c, apiKey, model, service.PlatformOpenAI))
+			platform, ok := service.ResolvedTargetPlatformFromContext(c.Request.Context())
+			require.True(t, ok)
+			require.Equal(t, service.PlatformOpenAI, platform)
+		})
+	}
+}
+
 func TestOpenAICompatibleTextTargetAllowsCompositeGrokModel(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

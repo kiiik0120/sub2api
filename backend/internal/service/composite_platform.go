@@ -124,6 +124,8 @@ func DetectModelPlatform(model string) (string, bool) {
 		strings.HasPrefix(normalized, "omni-moderation-"),
 		strings.HasPrefix(normalized, "dall-e-"),
 		strings.HasPrefix(normalized, "gpt-image-"),
+		strings.HasPrefix(normalized, "doubao-"),
+		strings.HasPrefix(normalized, "seedream-"),
 		strings.HasPrefix(normalized, "tts-"),
 		strings.HasPrefix(normalized, "whisper-"),
 		hasOpenAISeriesPrefix(normalized):
