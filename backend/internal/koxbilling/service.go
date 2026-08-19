@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,11 +26,13 @@ const (
 	internalAPIKeyEnv = "KOX_BILLING_INTERNAL_API_KEY"
 	webhookSecretEnv  = "SUB2API_WEBHOOK_SECRET"
 	webhookURLEnv     = "SUB2API_WEBHOOK_URL"
+	gatewayUserIDEnv  = "KOX_GATEWAY_USER_ID"
 )
 
 type Service struct {
 	db                                     *sql.DB
 	internalKey, webhookSecret, webhookURL string
+	gatewayUserID                          int64
 	client                                 *http.Client
 }
 type CreateKeyInput struct {
@@ -76,10 +79,11 @@ type Usage struct {
 }
 
 func New(db *sql.DB) *Service {
-	return &Service{db: db, internalKey: strings.TrimSpace(os.Getenv(internalAPIKeyEnv)), webhookSecret: strings.TrimSpace(os.Getenv(webhookSecretEnv)), webhookURL: strings.TrimSpace(os.Getenv(webhookURLEnv)), client: &http.Client{Timeout: 10 * time.Second}}
+	userID, _ := strconv.ParseInt(strings.TrimSpace(os.Getenv(gatewayUserIDEnv)), 10, 64)
+	return &Service{db: db, internalKey: strings.TrimSpace(os.Getenv(internalAPIKeyEnv)), webhookSecret: strings.TrimSpace(os.Getenv(webhookSecretEnv)), webhookURL: strings.TrimSpace(os.Getenv(webhookURLEnv)), gatewayUserID: userID, client: &http.Client{Timeout: 10 * time.Second}}
 }
 
-func (s *Service) Enabled() bool { return s != nil && s.db != nil && s.internalKey != "" }
+func (s *Service) Enabled() bool { return s != nil && s.db != nil && s.internalKey != "" && s.gatewayUserID > 0 }
 func (s *Service) Authorize(value string) bool {
 	if !s.Enabled() {
 		return false
@@ -111,7 +115,11 @@ func (s *Service) CreateKey(ctx context.Context, in CreateKeyInput) (Key, string
 	digest := digestKey(plain)
 	id := uuid.NewString()
 	fingerprint := keyFingerprint(plain)
-	_, err = tx.ExecContext(ctx, `INSERT INTO kox_api_keys(api_key_id,account_id,kox_user_id,key_digest,key_fingerprint) VALUES($1,$2,$3,$4,$5)`, id, accountID, in.KoxUserID, digest, fingerprint)
+	var gatewayKeyID int64
+	if err = tx.QueryRowContext(ctx, `INSERT INTO api_keys(user_id,key,name,status) VALUES($1,$2,$3,'active') RETURNING id`, s.gatewayUserID, plain, "kox:"+in.KoxCompanyID+":"+in.KoxUserID).Scan(&gatewayKeyID); err != nil {
+		return Key{}, "", err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO kox_api_keys(api_key_id,account_id,kox_user_id,key_digest,key_fingerprint,gateway_api_key_id) VALUES($1,$2,$3,$4,$5,$6)`, id, accountID, in.KoxUserID, digest, fingerprint, gatewayKeyID)
 	if err != nil {
 		return Key{}, "", err
 	}
@@ -148,6 +156,18 @@ func (s *Service) ListKeys(ctx context.Context, accountID, userID string) ([]Key
 	}
 	return out, rows.Err()
 }
+func (s *Service) Credential(ctx context.Context, id string) (Key, string, error) {
+	var key Key
+	var plain string
+	err := s.db.QueryRowContext(ctx, `SELECT k.api_key_id,k.account_id,k.kox_user_id,k.key_fingerprint,k.status,g.key
+		FROM kox_api_keys k JOIN api_keys g ON g.id=k.gateway_api_key_id
+		WHERE k.api_key_id=$1 AND k.status='active' AND g.status='active' AND g.deleted_at IS NULL`, id).
+		Scan(&key.ID, &key.AccountID, &key.KoxUserID, &key.Fingerprint, &key.Status, &plain)
+	if err != nil {
+		return Key{}, "", err
+	}
+	return key, plain, nil
+}
 func (s *Service) Disable(ctx context.Context, id string) error {
 	return s.setKeyStatus(ctx, id, "disabled")
 }
@@ -163,7 +183,16 @@ func (s *Service) Rotate(ctx context.Context, id string) (Key, string, error) {
 	return s.CreateKey(ctx, CreateKeyInput{company, user})
 }
 func (s *Service) setKeyStatus(ctx context.Context, id, status string) error {
-	r, e := s.db.ExecContext(ctx, `UPDATE kox_api_keys SET status=$2,disabled_at=NOW() WHERE api_key_id=$1 AND status='active'`, id, status)
+	tx, e := s.db.BeginTx(ctx, nil)
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	var gatewayKeyID sql.NullInt64
+	if e = tx.QueryRowContext(ctx, `SELECT gateway_api_key_id FROM kox_api_keys WHERE api_key_id=$1 AND status='active'`, id).Scan(&gatewayKeyID); e != nil {
+		return e
+	}
+	r, e := tx.ExecContext(ctx, `UPDATE kox_api_keys SET status=$2,disabled_at=NOW() WHERE api_key_id=$1 AND status='active'`, id, status)
 	if e != nil {
 		return e
 	}
@@ -171,7 +200,12 @@ func (s *Service) setKeyStatus(ctx context.Context, id, status string) error {
 	if n != 1 {
 		return sql.ErrNoRows
 	}
-	return nil
+	if gatewayKeyID.Valid {
+		if _, e = tx.ExecContext(ctx, `UPDATE api_keys SET status='disabled',updated_at=NOW() WHERE id=$1`, gatewayKeyID.Int64); e != nil {
+			return e
+		}
+	}
+	return tx.Commit()
 }
 
 // RecordUsage is the only write path for Kox usage.  The event payload is

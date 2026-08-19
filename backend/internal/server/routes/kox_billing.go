@@ -13,6 +13,7 @@ func RegisterKoxBillingRoutes(r *gin.Engine, h *koxbilling.Handler) {
 	g := r.Group("/internal/v1/kox", h.Authorize())
 	g.POST("/api-keys", h.CreateKey)
 	g.GET("/api-keys", h.ListKeys)
+	g.GET("/api-keys/:api_key_id/credential", h.Credential)
 	g.POST("/api-keys/:api_key_id/rotate", h.Rotate)
 	g.POST("/api-keys/:api_key_id/disable", h.Disable)
 	g.POST("/usage", h.RecordUsage)

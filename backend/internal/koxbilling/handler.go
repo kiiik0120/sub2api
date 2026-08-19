@@ -44,6 +44,18 @@ func (h *Handler) ListKeys(c *gin.Context) {
 	}
 	response.Success(c, gin.H{"items": keys})
 }
+func (h *Handler) Credential(c *gin.Context) {
+	key, plain, err := h.service.Credential(c.Request.Context(), c.Param("api_key_id"))
+	if err == sql.ErrNoRows {
+		response.Error(c, 404, "api key not found")
+		return
+	}
+	if err != nil {
+		response.Error(c, 500, "load api key credential failed")
+		return
+	}
+	response.Success(c, gin.H{"api_key_id": key.ID, "api_key": plain, "key_fingerprint": key.Fingerprint, "account_id": key.AccountID})
+}
 func (h *Handler) Rotate(c *gin.Context) {
 	key, plain, err := h.service.Rotate(c.Request.Context(), c.Param("api_key_id"))
 	if err == sql.ErrNoRows {
