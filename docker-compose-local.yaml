@@ -1,0 +1,97 @@
+services:
+  sub2api:
+    # Build the checked-out source so the Kox internal billing routes are
+    # available locally instead of depending on a remote image/proxy release.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sub2api:kox-local
+    container_name: sub2api
+    restart: unless-stopped
+    security_opt:
+      - 'no-new-privileges:true'
+    ulimits:
+      nofile:
+        soft: 100000
+        hard: 100000
+    ports:
+      - '${BIND_HOST:-0.0.0.0}:8999:8080'
+    volumes:
+      - 'sub2api_data:/app/data'
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    environment:
+      - AUTO_SETUP=true
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=8080
+      - 'SERVER_MODE=release'
+      - 'ENABLE_SERVER_TIMING=false'
+      - 'RUN_MODE=standard'
+      - 'UPDATE_GITHUB_TOKEN='
+      - 'DATABASE_HOST=10.10.160.45'
+      - 'DATABASE_PORT=9878'
+      - 'DATABASE_USER=postgres'
+      - 'DATABASE_PASSWORD=cOV5rdsrtLY8Ktt9jy5niiJLxQ6aYR5sdIF2vS3pAkZRptufA3lRGDBbPSqo5UT7'
+      - 'DATABASE_DBNAME=sub2api'
+      - 'DATABASE_SSLMODE=disable'
+      - 'DATABASE_MAX_OPEN_CONNS=50'
+      - 'DATABASE_MAX_IDLE_CONNS=10'
+      - 'DATABASE_CONN_MAX_LIFETIME_MINUTES=30'
+      - 'DATABASE_CONN_MAX_IDLE_TIME_MINUTES=5'
+      - 'REDIS_HOST=10.10.160.45'
+      - 'REDIS_PORT=9876'
+      - 'REDIS_USERNAME=default'
+      - 'REDIS_PASSWORD=y6aqGJUUezxYGUqKpRS9eDSaaTJon0DCN6sAGIDY2ApV74q6nyCGgdgiCFhEMB9t'
+      - 'REDIS_DB=0'
+      - 'REDIS_POOL_SIZE=1024'
+      - 'REDIS_MIN_IDLE_CONNS=10'
+      - 'REDIS_ENABLE_TLS=false'
+      - 'ADMIN_EMAIL=kiiikiii@126.com'
+      - 'ADMIN_PASSWORD=Uh7p6EdjQudYiE5Ew4Kx'
+      - 'JWT_SECRET=G27s9NJ4Q2cxARUbQzwUDPVYwy4e0P0NDTQ3cCy3LXWz6tZY1'
+      - 'JWT_EXPIRE_HOUR=24'
+      - 'SETUP_MIGRATION_TIMEOUT_SECONDS=0'
+      - 'TZ=Asia/Shanghai'
+      - 'GEMINI_OAUTH_CLIENT_ID='
+      - 'GEMINI_OAUTH_CLIENT_SECRET='
+      - 'GEMINI_OAUTH_SCOPES='
+      - 'GEMINI_QUOTA_POLICY='
+      - 'GEMINI_CLI_OAUTH_CLIENT_SECRET='
+      - 'ANTIGRAVITY_OAUTH_CLIENT_SECRET='
+      - 'ANTIGRAVITY_USER_AGENT_VERSION='
+      - 'GATEWAY_OPENAI_RESPONSE_HEADER_TIMEOUT=0'
+      - 'GATEWAY_OPENAI_HTTP2_ENABLED=true'
+      - 'GATEWAY_OPENAI_HTTP2_ALLOW_PROXY_FALLBACK_TO_HTTP1=true'
+      - 'GATEWAY_OPENAI_HTTP2_FALLBACK_ERROR_THRESHOLD=2'
+      - 'GATEWAY_OPENAI_HTTP2_FALLBACK_WINDOW_SECONDS=60'
+      - 'GATEWAY_OPENAI_HTTP2_FALLBACK_TTL_SECONDS=600'
+      - 'GATEWAY_OPENAI_PROXY_STREAM_CIRCUIT_FAILURE_THRESHOLD=2'
+      - 'GATEWAY_OPENAI_PROXY_STREAM_CIRCUIT_WINDOW_SECONDS=60'
+      - 'GATEWAY_OPENAI_PROXY_STREAM_CIRCUIT_TTL_SECONDS=600'
+      - 'GATEWAY_IMAGE_STREAM_DATA_INTERVAL_TIMEOUT=900'
+      - 'GATEWAY_IMAGE_STREAM_KEEPALIVE_INTERVAL=10'
+      - 'GATEWAY_IMAGE_CONCURRENCY_ENABLED=false'
+      - 'GATEWAY_IMAGE_CONCURRENCY_MAX_CONCURRENT_REQUESTS=0'
+      - 'GATEWAY_IMAGE_CONCURRENCY_OVERFLOW_MODE=reject'
+      - 'GATEWAY_IMAGE_CONCURRENCY_WAIT_TIMEOUT_SECONDS=30'
+      - 'GATEWAY_IMAGE_CONCURRENCY_MAX_WAITING_REQUESTS=100'
+      - 'KOX_BILLING_INTERNAL_API_KEY=C9CBfQJ3PCyiqoyqN6FryPM52FLwak'
+      - 'SUB2API_WEBHOOK_URL=http://host.docker.internal:8013/internal/ai-billing/sub2api/events'
+      - 'SUB2API_WEBHOOK_SECRET=Z4h1ajPkJeQ04XCfjm17YbHQT5uEv79k'
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - '-q'
+        - '-T'
+        - '5'
+        - '-O'
+        - /dev/null
+        - 'http://localhost:8080/health'
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+volumes:
+  sub2api_data:
+    driver: local
