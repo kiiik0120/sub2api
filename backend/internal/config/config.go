@@ -1442,6 +1442,10 @@ type DatabaseConfig struct {
 	Password string `mapstructure:"password"`
 	DBName   string `mapstructure:"dbname"`
 	SSLMode  string `mapstructure:"sslmode"`
+	// ConnectTimeoutSeconds limits a new PostgreSQL TCP connection attempt.
+	// It prevents an unavailable database route from holding requests for the
+	// operating system's much longer TCP retry window.
+	ConnectTimeoutSeconds int `mapstructure:"connect_timeout_seconds"`
 	// 连接池配置（性能优化：可配置化连接池参数）
 	// MaxOpenConns: 最大打开连接数，控制数据库连接上限，防止资源耗尽
 	MaxOpenConns int `mapstructure:"max_open_conns"`
@@ -1461,16 +1465,17 @@ type DatabaseConfig struct {
 }
 
 func (d *DatabaseConfig) DSN() string {
+	connectTimeout := d.effectiveConnectTimeoutSeconds()
 	// 当密码为空时不包含 password 参数，避免 libpq 解析错误
 	if d.Password == "" {
 		return fmt.Sprintf(
-			"host=%s port=%d user=%s dbname=%s sslmode=%s",
-			d.Host, d.Port, d.User, d.DBName, d.SSLMode,
+			"host=%s port=%d user=%s dbname=%s sslmode=%s connect_timeout=%d",
+			d.Host, d.Port, d.User, d.DBName, d.SSLMode, connectTimeout,
 		)
 	}
 	return fmt.Sprintf(
-		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
-		d.Host, d.Port, d.User, d.Password, d.DBName, d.SSLMode,
+		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s connect_timeout=%d",
+		d.Host, d.Port, d.User, d.Password, d.DBName, d.SSLMode, connectTimeout,
 	)
 }
 
@@ -1479,17 +1484,25 @@ func (d *DatabaseConfig) DSNWithTimezone(tz string) string {
 	if tz == "" {
 		tz = "Asia/Shanghai"
 	}
+	connectTimeout := d.effectiveConnectTimeoutSeconds()
 	// 当密码为空时不包含 password 参数，避免 libpq 解析错误
 	if d.Password == "" {
 		return fmt.Sprintf(
-			"host=%s port=%d user=%s dbname=%s sslmode=%s TimeZone=%s",
-			d.Host, d.Port, d.User, d.DBName, d.SSLMode, tz,
+			"host=%s port=%d user=%s dbname=%s sslmode=%s TimeZone=%s connect_timeout=%d",
+			d.Host, d.Port, d.User, d.DBName, d.SSLMode, tz, connectTimeout,
 		)
 	}
 	return fmt.Sprintf(
-		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s TimeZone=%s",
-		d.Host, d.Port, d.User, d.Password, d.DBName, d.SSLMode, tz,
+		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s TimeZone=%s connect_timeout=%d",
+		d.Host, d.Port, d.User, d.Password, d.DBName, d.SSLMode, tz, connectTimeout,
 	)
+}
+
+func (d *DatabaseConfig) effectiveConnectTimeoutSeconds() int {
+	if d.ConnectTimeoutSeconds > 0 {
+		return d.ConnectTimeoutSeconds
+	}
+	return 5
 }
 
 // RedisConfig Redis 连接配置
@@ -2092,6 +2105,7 @@ func setDefaults() {
 	viper.SetDefault("database.max_idle_conns", 128)
 	viper.SetDefault("database.conn_max_lifetime_minutes", 30)
 	viper.SetDefault("database.conn_max_idle_time_minutes", 5)
+	viper.SetDefault("database.connect_timeout_seconds", 5)
 	viper.SetDefault("database.user_platform_quota_flusher_enabled", false)
 	viper.SetDefault("database.user_platform_quota_flush_interval_ms", 2000)
 	viper.SetDefault("database.user_platform_quota_flush_batch_size", 1000)
@@ -2963,6 +2977,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Database.ConnMaxIdleTimeMinutes < 0 {
 		return fmt.Errorf("database.conn_max_idle_time_minutes must be non-negative")
+	}
+	if c.Database.ConnectTimeoutSeconds <= 0 {
+		return fmt.Errorf("database.connect_timeout_seconds must be positive")
 	}
 	if c.Redis.DialTimeoutSeconds <= 0 {
 		return fmt.Errorf("redis.dial_timeout_seconds must be positive")

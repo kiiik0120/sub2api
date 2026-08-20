@@ -1248,6 +1248,14 @@ func TestConfigAddressHelpers(t *testing.T) {
 	if !strings.Contains(dbCfg.DSNWithTimezone("UTC"), "TimeZone=UTC") {
 		t.Fatalf("DatabaseConfig.DSNWithTimezone() should use provided timezone")
 	}
+	if !strings.Contains(dbCfg.DSNWithTimezone("UTC"), "connect_timeout=5") {
+		t.Fatalf("DatabaseConfig.DSNWithTimezone() should apply the default connection timeout")
+	}
+
+	dbCfg.ConnectTimeoutSeconds = 2
+	if !strings.Contains(dbCfg.DSN(), "connect_timeout=2") {
+		t.Fatalf("DatabaseConfig.DSN() should use the configured connection timeout")
+	}
 
 	redis := RedisConfig{Host: "redis", Port: 6379}
 	if redis.Address() != "redis:6379" {
