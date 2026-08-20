@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -28,13 +29,21 @@ const (
 	webhookURLEnv     = "SUB2API_WEBHOOK_URL"
 	gatewayUserIDEnv  = "KOX_GATEWAY_USER_ID"
 	gatewayGroupIDEnv = "KOX_GATEWAY_GROUP_ID"
+
+	koxOutboxBatchSize     = 20
+	koxOutboxPollInterval  = 5 * time.Second
+	koxOutboxClaimTimeout  = 5 * time.Second
+	koxOutboxClaimLease    = 10 * time.Minute
+	koxWebhookTimeout      = 10 * time.Second
+	koxOutboxUpdateTimeout = 5 * time.Second
 )
 
 type Service struct {
 	db                                     *sql.DB
 	internalKey, webhookSecret, webhookURL string
 	gatewayUserID, gatewayGroupID           int64
-	client                                 *http.Client
+	workerID                                string
+	client                                  *http.Client
 }
 type CreateKeyInput struct {
 	KoxCompanyID string `json:"kox_company_id"`
@@ -82,7 +91,7 @@ type Usage struct {
 func New(db *sql.DB) *Service {
 	userID, _ := strconv.ParseInt(strings.TrimSpace(os.Getenv(gatewayUserIDEnv)), 10, 64)
 	groupID, _ := strconv.ParseInt(strings.TrimSpace(os.Getenv(gatewayGroupIDEnv)), 10, 64)
-	return &Service{db: db, internalKey: strings.TrimSpace(os.Getenv(internalAPIKeyEnv)), webhookSecret: strings.TrimSpace(os.Getenv(webhookSecretEnv)), webhookURL: strings.TrimSpace(os.Getenv(webhookURLEnv)), gatewayUserID: userID, gatewayGroupID: groupID, client: &http.Client{Timeout: 10 * time.Second}}
+	return &Service{db: db, internalKey: strings.TrimSpace(os.Getenv(internalAPIKeyEnv)), webhookSecret: strings.TrimSpace(os.Getenv(webhookSecretEnv)), webhookURL: strings.TrimSpace(os.Getenv(webhookURLEnv)), gatewayUserID: userID, gatewayGroupID: groupID, workerID: uuid.NewString(), client: &http.Client{Timeout: koxWebhookTimeout}}
 }
 
 func (s *Service) Enabled() bool { return s != nil && s.db != nil && s.internalKey != "" && s.gatewayUserID > 0 && s.gatewayGroupID > 0 }
@@ -289,32 +298,72 @@ func (s *Service) DeliverDue(ctx context.Context, limit int) error {
 	if s.webhookURL == "" || s.webhookSecret == "" {
 		return nil
 	}
-	if limit < 1 {
-		limit = 20
+	if limit < 1 || limit > koxOutboxBatchSize {
+		limit = koxOutboxBatchSize
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT event_id,payload,attempts FROM kox_billing_outbox WHERE delivery_status='pending' AND next_attempt_at<=NOW() ORDER BY created_at LIMIT $1 FOR UPDATE SKIP LOCKED`, limit)
+	claimCtx, cancel := context.WithTimeout(ctx, koxOutboxClaimTimeout)
+	defer cancel()
+	rows, err := s.db.QueryContext(claimCtx, `
+		WITH candidates AS MATERIALIZED (
+			SELECT event_id
+			FROM kox_billing_outbox
+			WHERE delivery_status = 'pending'
+			  AND next_attempt_at <= NOW()
+			  AND (claimed_at IS NULL OR claimed_at < NOW() - ($3 * INTERVAL '1 second'))
+			ORDER BY created_at
+			LIMIT $2
+			FOR UPDATE SKIP LOCKED
+		), claimed AS (
+			UPDATE kox_billing_outbox AS o
+			SET claimed_at = NOW(), claimed_by = $1
+			FROM candidates AS c
+			WHERE o.event_id = c.event_id
+			RETURNING o.event_id, o.payload, o.attempts
+		)
+		SELECT event_id, payload, attempts FROM claimed`, s.workerID, limit, int(koxOutboxClaimLease.Seconds()))
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	type claimedEvent struct {
+		id       string
+		payload  []byte
+		attempts int
+	}
+	events := make([]claimedEvent, 0, limit)
 	for rows.Next() {
-		var id string
-		var raw []byte
-		var attempts int
-		if err := rows.Scan(&id, &raw, &attempts); err != nil {
+		var event claimedEvent
+		if err := rows.Scan(&event.id, &event.payload, &event.attempts); err != nil {
+			_ = rows.Close()
 			return err
 		}
-		s.deliver(ctx, id, raw, attempts)
+		events = append(events, event)
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	var deliveryErrs []error
+	for _, event := range events {
+		if err := s.deliver(ctx, event.id, event.payload, event.attempts); err != nil {
+			deliveryErrs = append(deliveryErrs, fmt.Errorf("deliver outbox event %s: %w", event.id, err))
+		}
+	}
+	return errors.Join(deliveryErrs...)
 }
-func (s *Service) deliver(ctx context.Context, id string, raw []byte, attempts int) {
+
+func (s *Service) deliver(ctx context.Context, id string, raw []byte, attempts int) error {
+	deliveryCtx, cancel := context.WithTimeout(ctx, koxWebhookTimeout)
+	defer cancel()
 	now := time.Now().UTC()
 	timestamp := fmt.Sprint(now.Unix())
 	mac := hmac.New(sha256.New, []byte(s.webhookSecret))
 	_, _ = mac.Write([]byte(timestamp + "."))
 	_, _ = mac.Write(raw)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.webhookURL, bytes.NewReader(raw))
+	req, err := http.NewRequestWithContext(deliveryCtx, http.MethodPost, s.webhookURL, bytes.NewReader(raw))
 	if err == nil {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-Sub2API-Timestamp", timestamp)
@@ -322,25 +371,45 @@ func (s *Service) deliver(ctx context.Context, id string, raw []byte, attempts i
 		var resp *http.Response
 		resp, err = s.client.Do(req)
 		if resp != nil {
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			_ = resp.Body.Close()
-			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				_, _ = s.db.ExecContext(ctx, `UPDATE kox_billing_outbox SET delivery_status='delivered',attempts=attempts+1,first_attempted_at=COALESCE(first_attempted_at,NOW()),last_attempted_at=NOW(),completed_at=NOW(),last_response=$2 WHERE event_id=$1`, id, string(body))
-				return
+			body, readErr := readWebhookResponse(resp.Body)
+			if err == nil && readErr != nil {
+				err = fmt.Errorf("read webhook response: %w", readErr)
 			}
-			if resp.StatusCode == 401 {
-				_, _ = s.db.ExecContext(ctx, `UPDATE kox_billing_outbox SET delivery_status='blocked',last_error=$2,last_response=$3,last_attempted_at=NOW() WHERE event_id=$1`, id, "webhook returned 401", string(body))
-				return
+			if err == nil {
+				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+					return s.updateDelivery(ctx, `UPDATE kox_billing_outbox SET delivery_status='delivered',attempts=attempts+1,first_attempted_at=COALESCE(first_attempted_at,NOW()),last_attempted_at=NOW(),completed_at=NOW(),last_response=$2,claimed_at=NULL,claimed_by=NULL WHERE event_id=$1 AND claimed_by=$3`, id, body, s.workerID)
+				}
+				if resp.StatusCode == 401 {
+					return s.updateDelivery(ctx, `UPDATE kox_billing_outbox SET delivery_status='blocked',last_error=$2,last_response=$3,last_attempted_at=NOW(),claimed_at=NULL,claimed_by=NULL WHERE event_id=$1 AND claimed_by=$4`, id, "webhook returned 401", body, s.workerID)
+				}
+				if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != 429 {
+					return s.updateDelivery(ctx, `UPDATE kox_billing_outbox SET delivery_status='dead_letter',last_error=$2,last_response=$3,last_attempted_at=NOW(),claimed_at=NULL,claimed_by=NULL WHERE event_id=$1 AND claimed_by=$4`, id, fmt.Sprintf("webhook returned %d", resp.StatusCode), body, s.workerID)
+				}
+				err = fmt.Errorf("webhook returned %d", resp.StatusCode)
 			}
-			if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != 429 {
-				_, _ = s.db.ExecContext(ctx, `UPDATE kox_billing_outbox SET delivery_status='dead_letter',last_error=$2,last_response=$3,last_attempted_at=NOW() WHERE event_id=$1`, id, fmt.Sprintf("webhook returned %d", resp.StatusCode), string(body))
-				return
-			}
-			err = fmt.Errorf("webhook returned %d", resp.StatusCode)
 		}
 	}
 	delay := time.Duration(1<<min(attempts, 8)) * time.Second
-	_, _ = s.db.ExecContext(ctx, `UPDATE kox_billing_outbox SET attempts=attempts+1,first_attempted_at=COALESCE(first_attempted_at,NOW()),last_attempted_at=NOW(),next_attempt_at=NOW()+($2 * INTERVAL '1 second'),last_error=$3 WHERE event_id=$1`, id, int(delay.Seconds()), errorText(err))
+	return s.updateDelivery(ctx, `UPDATE kox_billing_outbox SET attempts=attempts+1,first_attempted_at=COALESCE(first_attempted_at,NOW()),last_attempted_at=NOW(),next_attempt_at=NOW()+($2 * INTERVAL '1 second'),last_error=$3,claimed_at=NULL,claimed_by=NULL WHERE event_id=$1 AND claimed_by=$4`, id, int(delay.Seconds()), errorText(err), s.workerID)
+}
+
+func readWebhookResponse(body io.ReadCloser) (string, error) {
+	defer body.Close()
+	response, err := io.ReadAll(io.LimitReader(body, 4096))
+	if err != nil {
+		return "", err
+	}
+	_, err = io.Copy(io.Discard, body)
+	return string(response), err
+}
+
+func (s *Service) updateDelivery(ctx context.Context, query string, args ...any) error {
+	updateCtx, cancel := context.WithTimeout(ctx, koxOutboxUpdateTimeout)
+	defer cancel()
+	if _, err := s.db.ExecContext(updateCtx, query, args...); err != nil {
+		return fmt.Errorf("persist delivery state: %w", err)
+	}
+	return nil
 }
 func (s *Service) Replay(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE kox_billing_outbox SET delivery_status='pending',next_attempt_at=NOW(),last_error=NULL,claimed_at=NULL,claimed_by=NULL WHERE event_id=$1 AND delivery_status IN ('dead_letter','blocked')`, id)
@@ -386,14 +455,16 @@ func (s *Service) Start(ctx context.Context) {
 		return
 	}
 	go func() {
-		t := time.NewTicker(time.Second)
+		t := time.NewTicker(koxOutboxPollInterval)
 		defer t.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				_ = s.DeliverDue(ctx, 20)
+				if err := s.DeliverDue(ctx, koxOutboxBatchSize); err != nil && ctx.Err() == nil {
+					slog.Error("kox billing outbox delivery failed", "error", err)
+				}
 			}
 		}
 	}()
