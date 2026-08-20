@@ -23,6 +23,7 @@ type ScheduledTestRunnerService struct {
 	cron      *cron.Cron
 	startOnce sync.Once
 	stopOnce  sync.Once
+	runMu     sync.Mutex
 }
 
 // NewScheduledTestRunnerService creates a new runner.
@@ -87,6 +88,12 @@ func (s *ScheduledTestRunnerService) Stop() {
 func (s *ScheduledTestRunnerService) runScheduled() {
 	// Delay 10s so execution lands at ~:10 of each minute instead of :00.
 	time.Sleep(10 * time.Second)
+	release, ok := s.tryAcquireScheduledRun()
+	if !ok {
+		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] skipped overlapping run")
+		return
+	}
+	defer release()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -117,6 +124,16 @@ func (s *ScheduledTestRunnerService) runScheduled() {
 	}
 
 	wg.Wait()
+}
+
+// tryAcquireScheduledRun prevents minute ticks from stacking while a prior
+// batch is still executing. Overlapping batches can otherwise multiply the
+// ten-worker limit and exhaust shared database connections.
+func (s *ScheduledTestRunnerService) tryAcquireScheduledRun() (func(), bool) {
+	if s == nil || !s.runMu.TryLock() {
+		return nil, false
+	}
+	return s.runMu.Unlock, true
 }
 
 func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, plan *ScheduledTestPlan) {
