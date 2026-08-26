@@ -67,6 +67,25 @@ type UsageInput struct {
 	OccurredAt        time.Time      `json:"occurred_at"`
 	Metadata          map[string]any `json:"metadata"`
 }
+
+// GatewayUsageInput is the framework-neutral usage payload produced by the
+// native gateway billing transaction.
+type GatewayUsageInput struct {
+	ProviderRequestID string
+	RequestID         string
+	ReservationID     string
+	BusinessCode      string
+	Model             string
+	BillingType       string
+	ActualCost        float64
+	Currency          string
+	Status            string
+	InputTokens       int
+	OutputTokens      int
+	CacheReadTokens   int
+	CacheWriteTokens  int
+	Metadata          map[string]any
+}
 type Key struct{ ID, AccountID, KoxUserID, Fingerprint, Status string }
 type Usage struct {
 	UsageLogID       string          `json:"usage_log_id"`
@@ -294,6 +313,76 @@ func (s *Service) RecordUsage(ctx context.Context, in UsageInput) (string, error
 	return usageID, nil
 }
 
+// RecordGatewayUsageTx records usage for a native gateway API key in the
+// caller's transaction. Non-Kox keys are deliberately a no-op.
+func (s *Service) RecordGatewayUsageTx(ctx context.Context, tx *sql.Tx, gatewayAPIKeyID int64, in GatewayUsageInput) (bool, error) {
+	if s == nil || tx == nil || in.ActualCost <= 0 {
+		return false, nil
+	}
+	var koxAPIKeyID string
+	err := tx.QueryRowContext(ctx, `SELECT api_key_id FROM kox_api_keys WHERE gateway_api_key_id=$1`, gatewayAPIKeyID).Scan(&koxAPIKeyID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		// Rolling deployments may run before the fork-local Kox migrations. Treat an absent Kox
+		// schema as feature-disabled, while preserving ordinary billing.
+		if strings.Contains(strings.ToLower(err.Error()), "does not exist") {
+			return false, nil
+		}
+		return false, err
+	}
+	if strings.TrimSpace(in.Currency) == "" {
+		in.Currency = "USD"
+	}
+	if strings.TrimSpace(in.Status) == "" {
+		in.Status = "succeeded"
+	}
+	if in.Metadata == nil {
+		in.Metadata = map[string]any{}
+	}
+	if strings.TrimSpace(in.ProviderRequestID) == "" {
+		return false, errors.New("kox provider request id is required")
+	}
+	if strings.TrimSpace(in.ReservationID) == "" {
+		return false, errors.New("kox reservation id is required")
+	}
+	if strings.TrimSpace(in.BusinessCode) == "" {
+		return false, errors.New("kox business code is required")
+	}
+	if strings.TrimSpace(in.Model) == "" {
+		in.Model = "unknown"
+	}
+	if strings.TrimSpace(in.BillingType) == "" {
+		in.BillingType = "token"
+	}
+
+	var usageID string
+	var revision int
+	err = tx.QueryRowContext(ctx, `SELECT usage_log_id,revision FROM kox_usage_logs WHERE provider_request_id=$1 FOR UPDATE`, in.ProviderRequestID).Scan(&usageID, &revision)
+	if errors.Is(err, sql.ErrNoRows) {
+		usageID = uuid.NewString()
+		revision = 1
+		_, err = tx.ExecContext(ctx, `INSERT INTO kox_usage_logs(usage_log_id,api_key_id,provider_request_id,request_id,reservation_id,business_code,model,billing_type,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,actual_cost,currency,status,occurred_at,revision,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`, usageID, koxAPIKeyID, in.ProviderRequestID, in.RequestID, in.ReservationID, in.BusinessCode, in.Model, in.BillingType, in.InputTokens, in.OutputTokens, in.CacheReadTokens, in.CacheWriteTokens, in.ActualCost, in.Currency, in.Status, time.Now().UTC(), revision, in.Metadata)
+	} else if err == nil {
+		revision++
+		_, err = tx.ExecContext(ctx, `UPDATE kox_usage_logs SET request_id=$2,reservation_id=$3,business_code=$4,model=$5,billing_type=$6,input_tokens=$7,output_tokens=$8,cache_read_tokens=$9,cache_write_tokens=$10,actual_cost=$11,currency=$12,status=$13,occurred_at=$14,revision=$15,metadata=$16,updated_at=NOW() WHERE usage_log_id=$1`, usageID, in.RequestID, in.ReservationID, in.BusinessCode, in.Model, in.BillingType, in.InputTokens, in.OutputTokens, in.CacheReadTokens, in.CacheWriteTokens, in.ActualCost, in.Currency, in.Status, time.Now().UTC(), revision, in.Metadata)
+	}
+	if err != nil {
+		return false, err
+	}
+	payload := map[string]any{"event_id": uuid.NewString(), "usage_log_id": usageID, "revision": revision, "reservation_id": in.ReservationID, "external_call_id": in.RequestID, "api_key_id": koxAPIKeyID, "business_code": in.BusinessCode, "model": in.Model, "billing_type": in.BillingType, "input_tokens": in.InputTokens, "output_tokens": in.OutputTokens, "cache_read_tokens": in.CacheReadTokens, "cache_write_tokens": in.CacheWriteTokens, "actual_cost": fmt.Sprintf("%.12f", in.ActualCost), "currency": in.Currency, "status": in.Status, "occurred_at": time.Now().UTC().Format(time.RFC3339Nano), "metadata": in.Metadata}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return false, err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO kox_billing_outbox(event_id,usage_log_id,revision,payload) VALUES($1,$2,$3,$4)`, payload["event_id"], usageID, revision, raw)
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (s *Service) DeliverDue(ctx context.Context, limit int) error {
 	if s.webhookURL == "" || s.webhookSecret == "" {
 		return nil
@@ -377,12 +466,15 @@ func (s *Service) deliver(ctx context.Context, id string, raw []byte, attempts i
 			}
 			if err == nil {
 				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+					slog.Info("kox billing webhook delivered", "event_id", id, "attempts", attempts+1, "status", resp.StatusCode)
 					return s.updateDelivery(ctx, `UPDATE kox_billing_outbox SET delivery_status='delivered',attempts=attempts+1,first_attempted_at=COALESCE(first_attempted_at,NOW()),last_attempted_at=NOW(),completed_at=NOW(),last_response=$2,claimed_at=NULL,claimed_by=NULL WHERE event_id=$1 AND claimed_by=$3`, id, body, s.workerID)
 				}
 				if resp.StatusCode == 401 {
+					slog.Warn("kox billing webhook blocked", "event_id", id, "attempts", attempts+1, "status", resp.StatusCode)
 					return s.updateDelivery(ctx, `UPDATE kox_billing_outbox SET delivery_status='blocked',last_error=$2,last_response=$3,last_attempted_at=NOW(),claimed_at=NULL,claimed_by=NULL WHERE event_id=$1 AND claimed_by=$4`, id, "webhook returned 401", body, s.workerID)
 				}
 				if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != 429 {
+					slog.Warn("kox billing webhook dead-lettered", "event_id", id, "attempts", attempts+1, "status", resp.StatusCode)
 					return s.updateDelivery(ctx, `UPDATE kox_billing_outbox SET delivery_status='dead_letter',last_error=$2,last_response=$3,last_attempted_at=NOW(),claimed_at=NULL,claimed_by=NULL WHERE event_id=$1 AND claimed_by=$4`, id, fmt.Sprintf("webhook returned %d", resp.StatusCode), body, s.workerID)
 				}
 				err = fmt.Errorf("webhook returned %d", resp.StatusCode)
@@ -390,6 +482,7 @@ func (s *Service) deliver(ctx context.Context, id string, raw []byte, attempts i
 		}
 	}
 	delay := time.Duration(1<<min(attempts, 8)) * time.Second
+	slog.Warn("kox billing webhook retry scheduled", "event_id", id, "attempts", attempts+1, "retry_after_seconds", int(delay.Seconds()), "error", err)
 	return s.updateDelivery(ctx, `UPDATE kox_billing_outbox SET attempts=attempts+1,first_attempted_at=COALESCE(first_attempted_at,NOW()),last_attempted_at=NOW(),next_attempt_at=NOW()+($2 * INTERVAL '1 second'),last_error=$3,claimed_at=NULL,claimed_by=NULL WHERE event_id=$1 AND claimed_by=$4`, id, int(delay.Seconds()), errorText(err), s.workerID)
 }
 

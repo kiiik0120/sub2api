@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	localmigrations "github.com/Wei-Shaw/sub2api/local-migrations"
 	"github.com/Wei-Shaw/sub2api/migrations"
 )
 
@@ -113,7 +114,10 @@ func ApplyMigrations(ctx context.Context, db *sql.DB) error {
 	if db == nil {
 		return errors.New("nil sql db")
 	}
-	return applyMigrationsFS(ctx, db, migrations.FS)
+	if err := applyMigrationsFS(ctx, db, migrations.FS); err != nil {
+		return err
+	}
+	return applyMigrationsFS(ctx, db, localmigrations.FS)
 }
 
 // applyMigrationsFS 是迁移执行的核心实现。

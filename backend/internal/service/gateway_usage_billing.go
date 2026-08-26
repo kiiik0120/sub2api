@@ -288,7 +288,15 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 		RequestPayloadHash: strings.TrimSpace(p.RequestPayloadHash),
 	}
 	if usageLog != nil {
+		cmd.LocalUsageLog = usageLog
 		cmd.Model = usageLog.Model
+		cmd.RequestedModel = usageLog.RequestedModel
+		cmd.UpstreamModel = optionalStringValue(usageLog.UpstreamModel)
+		cmd.GroupID = usageLog.GroupID
+		cmd.TotalCost = usageLog.TotalCost
+		cmd.RateMultiplier = usageLog.RateMultiplier
+		cmd.AccountRateMultiplier = optionalFloat64Value(usageLog.AccountRateMultiplier)
+		cmd.BillingMode = optionalStringValue(usageLog.BillingMode)
 		cmd.BillingType = usageLog.BillingType
 		cmd.InputTokens = usageLog.InputTokens
 		cmd.OutputTokens = usageLog.OutputTokens
@@ -329,6 +337,20 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 
 	cmd.Normalize()
 	return cmd
+}
+
+func optionalStringValue(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return strings.TrimSpace(*v)
+}
+
+func optionalFloat64Value(v *float64) float64 {
+	if v == nil {
+		return 1
+	}
+	return *v
 }
 
 func applyUsageBilling(ctx context.Context, requestID string, usageLog *UsageLog, p *postUsageBillingParams, deps *billingDeps, repo UsageBillingRepository) (bool, error) {
@@ -927,7 +949,9 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")
 		return billingErr
 	}
-	writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")
+	if usageLog.ID == 0 {
+		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")
+	}
 
 	return nil
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
+	localmigrations "github.com/Wei-Shaw/sub2api/local-migrations"
 	"github.com/Wei-Shaw/sub2api/migrations"
 
 	"entgo.io/ent/dialect"
@@ -71,6 +72,10 @@ func InitEnt(cfg *config.Config) (*ent.Client, *sql.DB, error) {
 	defer cancel()
 	if err := applyMigrationsFS(migrationCtx, drv.DB(), migrations.FS); err != nil {
 		_ = drv.Close() // 迁移失败时关闭驱动，避免资源泄露
+		return nil, nil, err
+	}
+	if err := applyMigrationsFS(migrationCtx, drv.DB(), localmigrations.FS); err != nil {
+		_ = drv.Close()
 		return nil, nil, err
 	}
 

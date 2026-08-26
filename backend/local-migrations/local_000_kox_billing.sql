@@ -1,5 +1,5 @@
--- Kox billing state is isolated from the user-facing api_keys table.  In
--- particular, the credential digest below is never usable as a bearer token.
+-- Fork-local Kox billing tables. Kept outside backend/migrations so upstream
+-- syncs never contend for the upstream migration ordering namespace.
 CREATE TABLE IF NOT EXISTS kox_service_accounts (
     account_id UUID PRIMARY KEY,
     kox_company_id TEXT NOT NULL UNIQUE,

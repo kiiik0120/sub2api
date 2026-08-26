@@ -4,19 +4,32 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/internal/koxbilling"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
 type usageBillingRepository struct {
-	db *sql.DB
+	db          *sql.DB
+	usageLogs   service.UsageLogRepository
+	koxBilling  *koxbilling.Service
 }
 
-func NewUsageBillingRepository(_ *dbent.Client, sqlDB *sql.DB) service.UsageBillingRepository {
-	return &usageBillingRepository{db: sqlDB}
+func NewUsageBillingRepository(_ *dbent.Client, sqlDB *sql.DB, deps ...any) service.UsageBillingRepository {
+	r := &usageBillingRepository{db: sqlDB}
+	for _, dep := range deps {
+		switch v := dep.(type) {
+		case service.UsageLogRepository:
+			r.usageLogs = v
+		case *koxbilling.Service:
+			r.koxBilling = v
+		}
+	}
+	return r
 }
 
 func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBillingCommand) (_ *service.UsageBillingApplyResult, err error) {
@@ -55,11 +68,74 @@ func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBi
 		return nil, err
 	}
 
+	if r.usageLogs != nil && cmd.LocalUsageLog != nil {
+		if writer, ok := r.usageLogs.(interface {
+			CreateInTx(context.Context, *sql.Tx, *service.UsageLog) (bool, error)
+		}); ok {
+			if _, err := writer.CreateInTx(ctx, tx, cmd.LocalUsageLog); err != nil {
+				return nil, fmt.Errorf("create local usage log in billing transaction: %w", err)
+			}
+		}
+	}
+
+	koxCost := cmd.SubscriptionCost
+	if koxCost <= 0 {
+		koxCost = cmd.BalanceCost
+	}
+	if r.koxBilling != nil && koxCost > 0 {
+		_, err := r.koxBilling.RecordGatewayUsageTx(ctx, tx, cmd.APIKeyID, koxbilling.GatewayUsageInput{
+			ProviderRequestID: cmd.RequestID,
+			RequestID:         cmd.RequestID,
+			ReservationID:     "sub2api:" + cmd.RequestID,
+			BusinessCode:      "gateway.usage",
+			Model:             cmd.Model,
+			BillingType:      koxBillingTypeName(cmd.BillingType, cmd.BillingMode),
+			ActualCost:       koxCost,
+			InputTokens:      cmd.InputTokens,
+			OutputTokens:     cmd.OutputTokens,
+			CacheReadTokens:  cmd.CacheReadTokens,
+			CacheWriteTokens: cmd.CacheCreationTokens,
+			Currency:         "USD",
+			Status:           "succeeded",
+			Metadata: map[string]any{
+				"total_cost":               cmd.TotalCost,
+				"billing_mode":             cmd.BillingMode,
+				"rate_multiplier":          cmd.RateMultiplier,
+				"account_rate_multiplier":  cmd.AccountRateMultiplier,
+				"requested_model":          cmd.RequestedModel,
+				"upstream_model":           cmd.UpstreamModel,
+				"group_id":                 int64PtrValue(cmd.GroupID),
+				"subscription_id":          int64PtrValue(cmd.SubscriptionID),
+			},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("record kox usage: %w", err)
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	tx = nil
 	return result, nil
+}
+
+
+func koxBillingTypeName(v int8, mode string) string {
+	if strings.TrimSpace(mode) != "" {
+		return strings.TrimSpace(mode)
+	}
+	if v == 1 {
+		return "subscription"
+	}
+	return "balance"
+}
+
+func int64PtrValue(v *int64) int64 {
+	if v == nil {
+		return 0
+	}
+	return *v
 }
 
 func (r *usageBillingRepository) claimUsageBillingKey(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand) (bool, error) {

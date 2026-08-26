@@ -36,12 +36,24 @@ type UsageBillingCommand struct {
 	CacheReadTokens     int
 	ImageCount          int
 	MediaType           string
+	BillingMode         string
+	RequestedModel      string
+	UpstreamModel       string
+	GroupID             *int64
+	TotalCost           float64
+	RateMultiplier      float64
+	AccountRateMultiplier float64
 
 	BalanceCost         float64
 	SubscriptionCost    float64
 	APIKeyQuotaCost     float64
 	APIKeyRateLimitCost float64
 	AccountQuotaCost    float64
+
+	// LocalUsageLog is persisted in the billing transaction when the repository
+	// is configured with a transactional usage-log writer. Keeping the full log
+	// here avoids rebuilding the many usage_logs columns in the billing layer.
+	LocalUsageLog *UsageLog
 }
 
 func (c *UsageBillingCommand) Normalize() {
