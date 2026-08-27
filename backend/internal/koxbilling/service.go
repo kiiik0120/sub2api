@@ -271,6 +271,10 @@ func (s *Service) RecordUsage(ctx context.Context, in UsageInput) (string, error
 	if in.Metadata == nil {
 		in.Metadata = map[string]any{}
 	}
+	metadataJSON, err := json.Marshal(in.Metadata)
+	if err != nil {
+		return "", fmt.Errorf("marshal kox usage metadata: %w", err)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", err
@@ -289,10 +293,10 @@ func (s *Service) RecordUsage(ctx context.Context, in UsageInput) (string, error
 	if errors.Is(err, sql.ErrNoRows) {
 		usageID = uuid.NewString()
 		revision = 1
-		_, err = tx.ExecContext(ctx, `INSERT INTO kox_usage_logs(usage_log_id,api_key_id,provider_request_id,request_id,reservation_id,business_code,model,billing_type,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,actual_cost,currency,status,occurred_at,revision,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`, usageID, in.APIKeyID, in.ProviderRequestID, in.RequestID, in.ReservationID, in.BusinessCode, in.Model, in.BillingType, in.InputTokens, in.OutputTokens, in.CacheReadTokens, in.CacheWriteTokens, in.ActualCost, in.Currency, in.Status, in.OccurredAt, revision, in.Metadata)
+		_, err = tx.ExecContext(ctx, `INSERT INTO kox_usage_logs(usage_log_id,api_key_id,provider_request_id,request_id,reservation_id,business_code,model,billing_type,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,actual_cost,currency,status,occurred_at,revision,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`, usageID, in.APIKeyID, in.ProviderRequestID, in.RequestID, in.ReservationID, in.BusinessCode, in.Model, in.BillingType, in.InputTokens, in.OutputTokens, in.CacheReadTokens, in.CacheWriteTokens, in.ActualCost, in.Currency, in.Status, in.OccurredAt, revision, metadataJSON)
 	} else if err == nil {
 		revision++
-		_, err = tx.ExecContext(ctx, `UPDATE kox_usage_logs SET request_id=$2,reservation_id=$3,business_code=$4,model=$5,billing_type=$6,input_tokens=$7,output_tokens=$8,cache_read_tokens=$9,cache_write_tokens=$10,actual_cost=$11,currency=$12,status=$13,occurred_at=$14,revision=$15,metadata=$16,updated_at=NOW() WHERE usage_log_id=$1`, usageID, in.RequestID, in.ReservationID, in.BusinessCode, in.Model, in.BillingType, in.InputTokens, in.OutputTokens, in.CacheReadTokens, in.CacheWriteTokens, in.ActualCost, in.Currency, in.Status, in.OccurredAt, revision, in.Metadata)
+		_, err = tx.ExecContext(ctx, `UPDATE kox_usage_logs SET request_id=$2,reservation_id=$3,business_code=$4,model=$5,billing_type=$6,input_tokens=$7,output_tokens=$8,cache_read_tokens=$9,cache_write_tokens=$10,actual_cost=$11,currency=$12,status=$13,occurred_at=$14,revision=$15,metadata=$16,updated_at=NOW() WHERE usage_log_id=$1`, usageID, in.RequestID, in.ReservationID, in.BusinessCode, in.Model, in.BillingType, in.InputTokens, in.OutputTokens, in.CacheReadTokens, in.CacheWriteTokens, in.ActualCost, in.Currency, in.Status, in.OccurredAt, revision, metadataJSON)
 	}
 	if err != nil {
 		return "", err
@@ -341,6 +345,10 @@ func (s *Service) RecordGatewayUsageTx(ctx context.Context, tx *sql.Tx, gatewayA
 	if in.Metadata == nil {
 		in.Metadata = map[string]any{}
 	}
+	metadataJSON, err := json.Marshal(in.Metadata)
+	if err != nil {
+		return false, fmt.Errorf("marshal kox gateway usage metadata: %w", err)
+	}
 	if strings.TrimSpace(in.ProviderRequestID) == "" {
 		return false, errors.New("kox provider request id is required")
 	}
@@ -363,10 +371,10 @@ func (s *Service) RecordGatewayUsageTx(ctx context.Context, tx *sql.Tx, gatewayA
 	if errors.Is(err, sql.ErrNoRows) {
 		usageID = uuid.NewString()
 		revision = 1
-		_, err = tx.ExecContext(ctx, `INSERT INTO kox_usage_logs(usage_log_id,api_key_id,provider_request_id,request_id,reservation_id,business_code,model,billing_type,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,actual_cost,currency,status,occurred_at,revision,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`, usageID, koxAPIKeyID, in.ProviderRequestID, in.RequestID, in.ReservationID, in.BusinessCode, in.Model, in.BillingType, in.InputTokens, in.OutputTokens, in.CacheReadTokens, in.CacheWriteTokens, in.ActualCost, in.Currency, in.Status, time.Now().UTC(), revision, in.Metadata)
+		_, err = tx.ExecContext(ctx, `INSERT INTO kox_usage_logs(usage_log_id,api_key_id,provider_request_id,request_id,reservation_id,business_code,model,billing_type,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,actual_cost,currency,status,occurred_at,revision,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`, usageID, koxAPIKeyID, in.ProviderRequestID, in.RequestID, in.ReservationID, in.BusinessCode, in.Model, in.BillingType, in.InputTokens, in.OutputTokens, in.CacheReadTokens, in.CacheWriteTokens, in.ActualCost, in.Currency, in.Status, time.Now().UTC(), revision, metadataJSON)
 	} else if err == nil {
 		revision++
-		_, err = tx.ExecContext(ctx, `UPDATE kox_usage_logs SET request_id=$2,reservation_id=$3,business_code=$4,model=$5,billing_type=$6,input_tokens=$7,output_tokens=$8,cache_read_tokens=$9,cache_write_tokens=$10,actual_cost=$11,currency=$12,status=$13,occurred_at=$14,revision=$15,metadata=$16,updated_at=NOW() WHERE usage_log_id=$1`, usageID, in.RequestID, in.ReservationID, in.BusinessCode, in.Model, in.BillingType, in.InputTokens, in.OutputTokens, in.CacheReadTokens, in.CacheWriteTokens, in.ActualCost, in.Currency, in.Status, time.Now().UTC(), revision, in.Metadata)
+		_, err = tx.ExecContext(ctx, `UPDATE kox_usage_logs SET request_id=$2,reservation_id=$3,business_code=$4,model=$5,billing_type=$6,input_tokens=$7,output_tokens=$8,cache_read_tokens=$9,cache_write_tokens=$10,actual_cost=$11,currency=$12,status=$13,occurred_at=$14,revision=$15,metadata=$16,updated_at=NOW() WHERE usage_log_id=$1`, usageID, in.RequestID, in.ReservationID, in.BusinessCode, in.Model, in.BillingType, in.InputTokens, in.OutputTokens, in.CacheReadTokens, in.CacheWriteTokens, in.ActualCost, in.Currency, in.Status, time.Now().UTC(), revision, metadataJSON)
 	}
 	if err != nil {
 		return false, err

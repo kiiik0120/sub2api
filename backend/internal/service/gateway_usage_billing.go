@@ -339,13 +339,6 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 	return cmd
 }
 
-func optionalStringValue(v *string) string {
-	if v == nil {
-		return ""
-	}
-	return strings.TrimSpace(*v)
-}
-
 func optionalFloat64Value(v *float64) float64 {
 	if v == nil {
 		return 1

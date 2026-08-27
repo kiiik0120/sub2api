@@ -24,7 +24,7 @@ func TestRecordGatewayUsageTxWritesKoxUsageAndOutboxForMappedKey(t *testing.T) {
 	mock.ExpectQuery("SELECT usage_log_id,revision FROM kox_usage_logs WHERE provider_request_id=\\$1 FOR UPDATE").
 		WithArgs("req-1").WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec("INSERT INTO kox_usage_logs").
-		WithArgs(sqlmock.AnyArg(), "kox-key", "req-1", "req-1", "sub2api:req-1", "gateway.usage", "gpt-5", "token", 10, 20, 3, 4, 0.25, "USD", "succeeded", sqlmock.AnyArg(), 1, sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "kox-key", "req-1", "req-1", "sub2api:req-1", "gateway.usage", "gpt-5", "token", 10, 20, 3, 4, 0.25, "USD", "succeeded", sqlmock.AnyArg(), 1, []byte(`{"source":"gateway"}`)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO kox_billing_outbox").
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), 1, sqlmock.AnyArg()).
@@ -38,7 +38,7 @@ func TestRecordGatewayUsageTxWritesKoxUsageAndOutboxForMappedKey(t *testing.T) {
 		ProviderRequestID: "req-1", RequestID: "req-1", ReservationID: "sub2api:req-1",
 		BusinessCode: "gateway.usage", Model: "gpt-5", BillingType: "token", ActualCost: 0.25,
 		Currency: "USD", Status: "succeeded", InputTokens: 10, OutputTokens: 20,
-		CacheReadTokens: 3, CacheWriteTokens: 4,
+		CacheReadTokens: 3, CacheWriteTokens: 4, Metadata: map[string]any{"source": "gateway"},
 	})
 	require.NoError(t, err)
 	require.True(t, created)
