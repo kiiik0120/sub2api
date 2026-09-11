@@ -32,6 +32,51 @@ func TestResolveVolcengineArk(t *testing.T) {
 	require.Equal(t, KindVolcengineArk, adapter.Kind())
 }
 
+func TestResolveCtyunMiniMax(t *testing.T) {
+	adapter, enabled, err := Resolve(map[string]any{CredentialKey: "ctyun_minimax"})
+	require.NoError(t, err)
+	require.True(t, enabled)
+	require.Equal(t, KindCtyunMiniMax, adapter.Kind())
+}
+
+func TestCtyunMiniMaxConvertsAndNormalizesVideoTask(t *testing.T) {
+	adapter := ctyunMiniMaxAdapter{}
+	prepared, err := adapter.PrepareRequest(OperationCreate, []byte(`{
+		"model":"MiniMax-H3","prompt":"paper boat","duration":5,
+		"resolution":"768p","aspect_ratio":"9:16"
+	}`), "application/json")
+	require.NoError(t, err)
+	require.Equal(t, "768p", prepared.VideoResolution)
+	require.Equal(t, 5, prepared.VideoDurationSeconds)
+	require.JSONEq(t, `{
+		"model":"MiniMax-H3","content":[{"type":"text","text":"paper boat"}],
+		"resolution":"768P","duration":5,"ratio":"9:16"
+	}`, string(prepared.Body))
+
+	created, err := adapter.NormalizeResponse(OperationCreate, []byte(`{"task_id":"task_123"}`), "", "")
+	require.NoError(t, err)
+	require.JSONEq(t, `{"request_id":"task_123","status":"pending"}`, string(created))
+
+	rawStatus := []byte(`{"task":{"id":"task_123","model":"MiniMax-H3","status":"succeeded","duration":5,"content":{"url":"https://media.ctyun.cn/task_123.mp4?signature=x"}}}`)
+	normalized, err := adapter.NormalizeResponse(OperationStatus, rawStatus, "task_123", "/v1/videos/task_123/content")
+	require.NoError(t, err)
+	require.JSONEq(t, `{"request_id":"task_123","model":"MiniMax-H3","status":"done","video":{"url":"/v1/videos/task_123/content","duration":5}}`, string(normalized))
+	content, err := adapter.ResolveContent("https://ai.ctaigw.cn/v1", "task_123", rawStatus)
+	require.NoError(t, err)
+	require.Equal(t, "https://media.ctyun.cn/task_123.mp4?signature=x", content.URL)
+	require.False(t, content.Authenticated)
+}
+
+func TestCtyunMiniMaxValidatesRequestAndContentHost(t *testing.T) {
+	adapter := ctyunMiniMaxAdapter{}
+	_, err := adapter.PrepareRequest(OperationCreate, []byte(`{"model":"MiniMax-H3","prompt":"x","duration":3}`), "application/json")
+	require.ErrorContains(t, err, "4 to 15")
+	_, err = adapter.PrepareRequest(OperationCreate, []byte(`{"model":"MiniMax-H3","prompt":"x","resolution":"1080p"}`), "application/json")
+	require.ErrorContains(t, err, "480P, 768P, or 2K")
+	_, err = adapter.ResolveContent("https://ai.ctaigw.cn/v1", "task", []byte(`{"task":{"content":{"url":"https://attacker.invalid/video.mp4"}}}`))
+	require.ErrorContains(t, err, "unsupported video content URL")
+}
+
 func TestOpenAIVideosConvertsGrokCreateRequest(t *testing.T) {
 	adapter := openAIVideosAdapter{}
 	prepared, err := adapter.PrepareRequest(OperationCreate, []byte(`{

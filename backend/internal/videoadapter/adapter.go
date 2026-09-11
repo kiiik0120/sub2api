@@ -19,6 +19,10 @@ const (
 	KindNative        Kind = "native"
 	KindOpenAIVideos  Kind = "openai_videos"
 	KindVolcengineArk Kind = "volcengine_ark"
+	// KindCtyunMiniMax is the Tianyi Cloud MiniMax-H3 video protocol. The
+	// provider prefix is intentional: video adapters own one vendor contract
+	// and must not be selected merely because a model name happens to match.
+	KindCtyunMiniMax Kind = "ctyun_minimax"
 )
 
 type Operation string
@@ -85,6 +89,8 @@ func Resolve(credentials map[string]any) (adapter Adapter, enabled bool, err err
 		return openAIVideosAdapter{}, true, nil
 	case KindVolcengineArk:
 		return volcengineArkAdapter{}, true, nil
+	case KindCtyunMiniMax:
+		return ctyunMiniMaxAdapter{}, true, nil
 	default:
 		return nil, false, fmt.Errorf("unsupported %s type %q", CredentialKey, name)
 	}

@@ -38,6 +38,7 @@ The initial adapters are:
 | `native` | `POST /videos/generations` | `GET /videos/{id}` | xAI signed URL or `GET /videos/{id}/content` |
 | `openai_videos` | `POST /videos` | `GET /videos/{id}` | `GET /videos/{id}/content` |
 | `volcengine_ark` | `POST /contents/generations/tasks` | `GET /contents/generations/tasks/{id}` | signed `content.video_url` |
+| `ctyun_minimax` | `POST /video_generation` | `GET /query/video_generation/{id}` | signed `task.content.url` |
 
 For `openai_videos`, Sub2API converts `duration` to `seconds`, derives the
 protocol size from `resolution` and `aspect_ratio`, converts the first Grok
@@ -95,12 +96,41 @@ the corresponding operator on 2026-05-11 and recommends
 `doubao-seedance-1-5-pro-251215`; confirm availability of the old model for the
 specific Ark account or relay before enabling it in production.
 
+### Tianyi Cloud / MiniMax-H3
+
+Tianyi Cloud's MiniMax video API is not OpenAI-compatible. Use its dedicated,
+vendor-prefixed adapter; retain `/v1` in the configured base URL because the
+adapter adds only the operation path.
+
+```json
+{
+  "platform": "grok",
+  "type": "apikey",
+  "credentials": {
+    "api_key": "ctyun-app-key",
+    "base_url": "https://ai.ctaigw.cn/v1",
+    "video_adapter": "ctyun_minimax",
+    "model_mapping": {
+      "minimax-h3": "MiniMax-H3"
+    }
+  }
+}
+```
+
+For text-to-video, the adapter translates the Grok request into Tianyi's
+`content` array and requires a 4--15 second duration. It uses `16:9` when the
+public request does not contain an aspect ratio, and supports `480P`, `768P`,
+and `2K`. It converts `queued`/`running`/`succeeded`/`failed` task states to
+the Grok lifecycle and downloads the completed signed `task.content.url`
+without forwarding the account key.
+
 ## Adding another provider
 
-Add one adapter implementation under `backend/internal/videoadapter` and
-register it in `Resolve`. Do not add vendor branches to handlers, schedulers, or
-billing. Tests should cover the adapter interface plus one forwarding contract
-test through `OpenAIGatewayService.ForwardGrokMedia`.
+Add one uniquely vendor-prefixed adapter implementation under
+`backend/internal/videoadapter` and register it in `Resolve`. Do not add vendor
+branches to handlers, schedulers, or billing. Tests should cover the adapter
+interface plus one forwarding contract test through
+`OpenAIGatewayService.ForwardGrokMedia`.
 
 The `openai_videos` name describes the wire protocol, not a requirement to call
 OpenAI directly. As of 2026-09-11, OpenAI marks its Sora Videos API deprecated
