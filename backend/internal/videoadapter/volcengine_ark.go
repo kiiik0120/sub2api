@@ -147,8 +147,7 @@ func (volcengineArkAdapter) ResolveContent(baseURL, _ string, statusBody []byte)
 		return ContentRequest{}, errors.New("volcengine_ark completed task is missing content.video_url")
 	}
 	parsed, err := url.Parse(rawURL)
-	if err != nil || !strings.EqualFold(parsed.Scheme, "https") || parsed.User != nil ||
-		(parsed.Port() != "" && parsed.Port() != "443") || !isTrustedArkContentHost(parsed.Hostname(), baseURL) {
+	if err != nil || !isSafeSignedMediaURL(parsed) {
 		return ContentRequest{}, errors.New("volcengine_ark returned an unsupported video content URL")
 	}
 	return ContentRequest{URL: parsed.String(), Authenticated: false}, nil
@@ -159,17 +158,4 @@ func appendArkPromptOption(prompt, name, value string) string {
 		return prompt
 	}
 	return strings.TrimSpace(prompt) + " --" + name + " " + strings.TrimSpace(value)
-}
-
-func isTrustedArkContentHost(host, baseURL string) bool {
-	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
-	if parsedBase, err := url.Parse(baseURL); err == nil && strings.EqualFold(host, parsedBase.Hostname()) {
-		return true
-	}
-	for _, suffix := range []string{".volces.com", ".volccdn.com", ".volcengine.com"} {
-		if strings.HasSuffix(host, suffix) && len(host) > len(suffix) {
-			return true
-		}
-	}
-	return false
 }

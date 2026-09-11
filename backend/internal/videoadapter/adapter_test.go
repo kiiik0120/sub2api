@@ -67,13 +67,22 @@ func TestCtyunMiniMaxConvertsAndNormalizesVideoTask(t *testing.T) {
 	require.False(t, content.Authenticated)
 }
 
-func TestCtyunMiniMaxValidatesRequestAndContentHost(t *testing.T) {
+func TestCtyunMiniMaxValidatesRequestAndAcceptsExternalContentHost(t *testing.T) {
 	adapter := ctyunMiniMaxAdapter{}
 	_, err := adapter.PrepareRequest(OperationCreate, []byte(`{"model":"MiniMax-H3","prompt":"x","duration":3}`), "application/json")
 	require.ErrorContains(t, err, "4 to 15")
 	_, err = adapter.PrepareRequest(OperationCreate, []byte(`{"model":"MiniMax-H3","prompt":"x","resolution":"1080p"}`), "application/json")
 	require.ErrorContains(t, err, "480P, 768P, or 2K")
-	_, err = adapter.ResolveContent("https://ai.ctaigw.cn/v1", "task", []byte(`{"task":{"content":{"url":"https://attacker.invalid/video.mp4"}}}`))
+	content, err := adapter.ResolveContent("https://ai.ctaigw.cn/v1", "task", []byte(`{"task":{"content":{"url":"https://cdn.example.invalid/video.mp4"}}}`))
+	require.NoError(t, err)
+	require.Equal(t, "https://cdn.example.invalid/video.mp4", content.URL)
+}
+
+func TestCtyunMiniMaxRejectsUnsafeContentURL(t *testing.T) {
+	adapter := ctyunMiniMaxAdapter{}
+	_, err := adapter.ResolveContent("https://ai.ctaigw.cn/v1", "task", []byte(`{
+		"task":{"content":{"url":"http://cdn.example.invalid/video.mp4"}}
+	}`))
 	require.ErrorContains(t, err, "unsupported video content URL")
 }
 
@@ -196,10 +205,11 @@ func TestVolcengineArkNormalizesStatusAndResolvesSignedContent(t *testing.T) {
 	require.False(t, content.Authenticated)
 }
 
-func TestVolcengineArkRejectsUntrustedContentURL(t *testing.T) {
+func TestVolcengineArkAcceptsExternalSignedContentURL(t *testing.T) {
 	adapter := volcengineArkAdapter{}
-	_, err := adapter.ResolveContent("https://ark.cn-beijing.volces.com/api/v3", "task_123", []byte(`{
+	content, err := adapter.ResolveContent("https://ark.cn-beijing.volces.com/api/v3", "task_123", []byte(`{
 		"status":"succeeded","content":{"video_url":"https://attacker.invalid/video.mp4"}
 	}`))
-	require.ErrorContains(t, err, "unsupported video content URL")
+	require.NoError(t, err)
+	require.Equal(t, "https://attacker.invalid/video.mp4", content.URL)
 }

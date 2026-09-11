@@ -113,8 +113,7 @@ func (ctyunMiniMaxAdapter) ResolveContent(baseURL, _ string, statusBody []byte) 
 	content, _ := task["content"].(map[string]any)
 	rawURL := strings.TrimSpace(stringValue(content["url"]))
 	parsed, err := url.Parse(rawURL)
-	if err != nil || !strings.EqualFold(parsed.Scheme, "https") || parsed.User != nil ||
-		(parsed.Port() != "" && parsed.Port() != "443") || !isTrustedCtyunContentHost(parsed.Hostname(), baseURL) {
+	if err != nil || !isSafeSignedMediaURL(parsed) {
 		return ContentRequest{}, errors.New("ctyun_minimax returned an unsupported video content URL")
 	}
 	return ContentRequest{URL: parsed.String(), Authenticated: false}, nil
@@ -145,12 +144,4 @@ func ctyunMiniMaxResolution(value string) string {
 	default:
 		return ""
 	}
-}
-
-func isTrustedCtyunContentHost(host, baseURL string) bool {
-	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
-	if parsedBase, err := url.Parse(baseURL); err == nil && strings.EqualFold(host, parsedBase.Hostname()) {
-		return true
-	}
-	return strings.HasSuffix(host, ".ctyun.cn") && len(host) > len(".ctyun.cn")
 }

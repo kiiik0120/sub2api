@@ -239,6 +239,14 @@ func buildURL(baseURL, requestID string, operation Operation, paths map[Operatio
 	return baseURL + path, nil
 }
 
+// isSafeSignedMediaURL intentionally does not impose a vendor/CDN hostname
+// allowlist. Providers commonly return tenant-specific signed object-storage
+// domains, and adapter content requests never forward account credentials.
+func isSafeSignedMediaURL(value *url.URL) bool {
+	return value != nil && strings.EqualFold(value.Scheme, "https") && value.Hostname() != "" &&
+		value.User == nil && (value.Port() == "" || value.Port() == "443")
+}
+
 func normalizeOpenAIStatus(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "completed", "succeeded", "success", "done":

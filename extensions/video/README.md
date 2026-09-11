@@ -122,7 +122,9 @@ For text-to-video, the adapter translates the Grok request into Tianyi's
 public request does not contain an aspect ratio, and supports `480P`, `768P`,
 and `2K`. It converts `queued`/`running`/`succeeded`/`failed` task states to
 the Grok lifecycle and downloads the completed signed `task.content.url`
-without forwarding the account key.
+without forwarding the account key. Adapter content downloads accept any HTTPS
+signed resource hostname, so provider CDN and tenant-specific object-storage
+domains do not require new code or configuration.
 
 ## Adding another provider
 
