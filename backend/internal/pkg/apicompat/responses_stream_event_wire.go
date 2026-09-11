@@ -167,9 +167,6 @@ func responsesItemWire(item *ResponsesOutput) map[string]any {
 	if item.Status != "" {
 		m["status"] = item.Status
 	}
-	if item.Author != "" {
-		m["author"] = item.Author
-	}
 	switch item.Type {
 	case "message":
 		role := item.Role

@@ -265,7 +265,6 @@ type ResponsesInputItem struct {
 
 	// Role-based messages (developer/system/user/assistant)
 	Role    string          `json:"role,omitempty"`
-	Author  string          `json:"author,omitempty"`
 	Content json.RawMessage `json:"content,omitempty"` // string or []ResponsesContentPart
 
 	// type=reasoning (multi-turn replay of encrypted reasoning)
@@ -359,8 +358,13 @@ func (t *ResponsesTool) UnmarshalJSON(data []byte) error {
 
 // ResponsesResponse is the non-streaming response from POST /v1/responses.
 type ResponsesResponse struct {
-	ID          string            `json:"id"`
-	Object      string            `json:"object"` // "response"
+	ID     string `json:"id"`
+	Object string `json:"object"` // "response"
+	// CreatedAt is the unix creation timestamp. Strict Responses clients declare
+	// it non-optional and abort with `missing field 'created_at'` when it is
+	// absent, so it is always emitted — no omitempty. Same rule as ID (see the
+	// "clients treat it as required" fallback in ChatCompletionsResponseToAnthropic).
+	CreatedAt   int64             `json:"created_at"`
 	Model       string            `json:"model"`
 	Status      string            `json:"status"` // "completed" | "incomplete" | "failed"
 	Output      []ResponsesOutput `json:"output"`
@@ -388,10 +392,6 @@ type ResponsesIncompleteDetails struct {
 // ResponsesOutput is one output item in a Responses API response.
 type ResponsesOutput struct {
 	Type string `json:"type"` // "message" | "reasoning" | "function_call" | "web_search_call"
-	// Author identifies the originating agent for multi-agent output items.
-	// It must survive decode/encode so a later Responses input can retain
-	// the original agent attribution.
-	Author string `json:"author,omitempty"`
 
 	// type=message
 	ID      string                 `json:"id,omitempty"`
@@ -435,9 +435,6 @@ func (o ResponsesOutput) MarshalJSON() ([]byte, error) {
 	}
 	if o.Status != "" {
 		m["status"] = o.Status
-	}
-	if o.Author != "" {
-		m["author"] = o.Author
 	}
 	return json.Marshal(m)
 }
@@ -719,7 +716,7 @@ type ChatFile struct {
 
 // ChatTool describes a tool available to the model.
 type ChatTool struct {
-	Type     string        `json:"type"` // "function" | "x_search"
+	Type     string        `json:"type"` // "function" | "web_search" | "code_execution" | "x_search"
 	Function *ChatFunction `json:"function,omitempty"`
 
 	// type=x_search
