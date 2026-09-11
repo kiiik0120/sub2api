@@ -25,6 +25,13 @@ func TestResolveOpenAIVideosFromStringOrObject(t *testing.T) {
 	}
 }
 
+func TestResolveVolcengineArk(t *testing.T) {
+	adapter, enabled, err := Resolve(map[string]any{CredentialKey: "volcengine_ark"})
+	require.NoError(t, err)
+	require.True(t, enabled)
+	require.Equal(t, KindVolcengineArk, adapter.Kind())
+}
+
 func TestOpenAIVideosConvertsGrokCreateRequest(t *testing.T) {
 	adapter := openAIVideosAdapter{}
 	prepared, err := adapter.PrepareRequest(OperationCreate, []byte(`{
@@ -84,4 +91,70 @@ func TestBuildURLEscapesOpaqueRequestID(t *testing.T) {
 func TestResolveRejectsUnknownAdapter(t *testing.T) {
 	_, _, err := Resolve(map[string]any{CredentialKey: "mystery"})
 	require.ErrorContains(t, err, "unsupported video_adapter")
+}
+
+func TestVolcengineArkConvertsRetiredSeedanceLiteT2VRequest(t *testing.T) {
+	adapter := volcengineArkAdapter{}
+	prepared, err := adapter.PrepareRequest(OperationCreate, []byte(`{
+		"model":"doubao-seedance-1-0-lite-t2v-250428",
+		"prompt":"一只柯基在海边奔跑","duration":5,
+		"resolution":"720p","aspect_ratio":"16:9"
+	}`), "application/json")
+	require.NoError(t, err)
+	require.Equal(t, "720p", prepared.VideoResolution)
+	require.Equal(t, 5, prepared.VideoDurationSeconds)
+	require.JSONEq(t, `{
+		"model":"doubao-seedance-1-0-lite-t2v-250428",
+		"content":[{"type":"text","text":"一只柯基在海边奔跑 --ratio 16:9 --resolution 720p --duration 5"}]
+	}`, string(prepared.Body))
+}
+
+func TestVolcengineArkPinsAndValidatesRetiredModelLimits(t *testing.T) {
+	adapter := volcengineArkAdapter{}
+	prepared, err := adapter.PrepareRequest(OperationCreate, []byte(`{
+		"model":"doubao-seedance-1-0-lite-t2v-250428","prompt":"waves"
+	}`), "application/json")
+	require.NoError(t, err)
+	require.Equal(t, "480p", prepared.VideoResolution)
+	require.Equal(t, 5, prepared.VideoDurationSeconds)
+	require.JSONEq(t, `{
+		"model":"doubao-seedance-1-0-lite-t2v-250428",
+		"content":[{"type":"text","text":"waves --resolution 480p --duration 5"}]
+	}`, string(prepared.Body))
+
+	_, err = adapter.PrepareRequest(OperationCreate, []byte(`{
+		"model":"doubao-seedance-1-0-lite-t2v-250428","prompt":"waves","duration":8
+	}`), "application/json")
+	require.ErrorContains(t, err, "only 5 or 10 second")
+	_, err = adapter.PrepareRequest(OperationCreate, []byte(`{
+		"model":"doubao-seedance-1-0-lite-t2v-250428","prompt":"waves","resolution":"1080p"
+	}`), "application/json")
+	require.ErrorContains(t, err, "only 480p or 720p")
+}
+
+func TestVolcengineArkNormalizesStatusAndResolvesSignedContent(t *testing.T) {
+	adapter := volcengineArkAdapter{}
+	raw := []byte(`{
+		"id":"task_123","model":"doubao-seedance-1-0-lite-t2v-250428",
+		"status":"succeeded","duration":5,
+		"content":{"video_url":"https://ark-content.volces.com/video/task_123.mp4?signature=test"}
+	}`)
+	normalized, err := adapter.NormalizeResponse(OperationStatus, raw, "task_123", "/v1/videos/task_123/content")
+	require.NoError(t, err)
+	require.JSONEq(t, `{
+		"request_id":"task_123","model":"doubao-seedance-1-0-lite-t2v-250428",
+		"status":"done","video":{"url":"/v1/videos/task_123/content","duration":5}
+	}`, string(normalized))
+	content, err := adapter.ResolveContent("https://ark.cn-beijing.volces.com/api/v3", "task_123", raw)
+	require.NoError(t, err)
+	require.Equal(t, "https://ark-content.volces.com/video/task_123.mp4?signature=test", content.URL)
+	require.False(t, content.Authenticated)
+}
+
+func TestVolcengineArkRejectsUntrustedContentURL(t *testing.T) {
+	adapter := volcengineArkAdapter{}
+	_, err := adapter.ResolveContent("https://ark.cn-beijing.volces.com/api/v3", "task_123", []byte(`{
+		"status":"succeeded","content":{"video_url":"https://attacker.invalid/video.mp4"}
+	}`))
+	require.ErrorContains(t, err, "unsupported video content URL")
 }

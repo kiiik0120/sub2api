@@ -189,24 +189,30 @@ func (s *OpenAIGatewayService) forwardAdaptedGrokVideoContent(
 		}
 		return s.handleGrokMediaErrorResponse(ctx, statusResp, c, account, statusRequestID, "")
 	}
-	statusBody, err := ReadUpstreamResponseBody(statusResp.Body, s.cfg, c, openAITooLargeError)
+	rawStatusBody, err := ReadUpstreamResponseBody(statusResp.Body, s.cfg, c, openAITooLargeError)
 	_ = statusResp.Body.Close()
 	if err != nil {
 		return nil, err
 	}
-	statusBody, err = adapter.NormalizeResponse(videoadapter.OperationStatus, statusBody, requestID, grokMediaContentProxyURL(c, requestID))
+	statusBody, err := adapter.NormalizeResponse(videoadapter.OperationStatus, rawStatusBody, requestID, grokMediaContentProxyURL(c, requestID))
 	if err != nil {
 		return nil, fmt.Errorf("normalize %s video status: %w", adapter.Kind(), err)
 	}
-	contentURL, err := s.adaptedGrokVideoURL(account, adapter, videoadapter.OperationContent, requestID)
+	baseURL, err := s.adaptedGrokVideoBaseURL(account)
 	if err != nil {
 		return nil, err
 	}
-	contentReq, err := http.NewRequestWithContext(WithHTTPUpstreamRedirectsDisabled(upstreamCtx), http.MethodGet, contentURL, nil)
+	content, err := adapter.ResolveContent(baseURL, requestID, rawStatusBody)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %s video content: %w", adapter.Kind(), err)
+	}
+	contentReq, err := http.NewRequestWithContext(WithHTTPUpstreamRedirectsDisabled(upstreamCtx), http.MethodGet, content.URL, nil)
 	if err != nil {
 		return nil, err
 	}
-	applyAdaptedGrokVideoHeaders(contentReq, account, token, "", false)
+	if content.Authenticated {
+		applyAdaptedGrokVideoHeaders(contentReq, account, token, "", false)
+	}
 	contentReq.Header.Set("Accept", "*/*")
 	if c != nil {
 		if rangeHeader := strings.TrimSpace(c.GetHeader("Range")); rangeHeader != "" {
@@ -239,6 +245,14 @@ func (s *OpenAIGatewayService) forwardAdaptedGrokVideoContent(
 }
 
 func (s *OpenAIGatewayService) adaptedGrokVideoURL(account *Account, adapter videoadapter.Adapter, operation videoadapter.Operation, requestID string) (string, error) {
+	baseURL, err := s.adaptedGrokVideoBaseURL(account)
+	if err != nil {
+		return "", err
+	}
+	return adapter.BuildURL(baseURL, requestID, operation)
+}
+
+func (s *OpenAIGatewayService) adaptedGrokVideoBaseURL(account *Account) (string, error) {
 	validator, err := grokBaseURLValidator(account, s.cfg)
 	if err != nil {
 		return "", err
@@ -247,7 +261,7 @@ func (s *OpenAIGatewayService) adaptedGrokVideoURL(account *Account, adapter vid
 	if err != nil {
 		return "", err
 	}
-	return adapter.BuildURL(baseURL, requestID, operation)
+	return baseURL, nil
 }
 
 func (s *OpenAIGatewayService) doAdaptedGrokVideoRequest(ctx context.Context, c *gin.Context, account *Account, req *http.Request) (*http.Response, error) {

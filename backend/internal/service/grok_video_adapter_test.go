@@ -138,3 +138,89 @@ func TestForwardGrokVideoOpenAIAdapterProxiesContentAndReturnsBillableResult(t *
 	require.Equal(t, 1, result.VideoCount)
 	require.Equal(t, 8, result.VideoDurationSeconds)
 }
+
+func TestForwardGrokVideoVolcengineArkAdapterSupportsSeedanceLiteT2VContract(t *testing.T) {
+	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	body := []byte(`{
+		"model":"grok-imagine-video","prompt":"一只柯基在海边奔跑",
+		"duration":5,"resolution":"720p","aspect_ratio":"16:9"
+	}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos/generations", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	account := &Account{
+		ID: 84, Name: "volcengine ark", Platform: PlatformGrok, Type: AccountTypeAPIKey, Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key": "ark-key", "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+			"video_adapter": "volcengine_ark",
+			"model_mapping": map[string]any{
+				"grok-imagine-video": "doubao-seedance-1-0-lite-t2v-250428",
+			},
+		},
+	}
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}, "X-Request-Id": []string{"ark-rid"}},
+		Body:       io.NopCloser(strings.NewReader(`{"id":"task_123","status":"queued"}`)),
+	}}
+	svc := &OpenAIGatewayService{httpUpstream: upstream}
+
+	result, err := svc.ForwardGrokMedia(context.Background(), c, account, GrokMediaEndpointVideosGenerations, "", body, "application/json")
+	require.NoError(t, err)
+	require.Equal(t, "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks", upstream.lastReq.URL.String())
+	require.Equal(t, "Bearer ark-key", upstream.lastReq.Header.Get("Authorization"))
+	require.JSONEq(t, `{
+		"model":"doubao-seedance-1-0-lite-t2v-250428",
+		"content":[{"type":"text","text":"一只柯基在海边奔跑 --ratio 16:9 --resolution 720p --duration 5"}]
+	}`, string(upstream.lastBody))
+	require.JSONEq(t, `{"request_id":"task_123","status":"pending"}`, recorder.Body.String())
+	require.Equal(t, "task_123", result.ResponseID)
+	require.Equal(t, "grok-imagine-video", result.BillingModel)
+	require.Equal(t, "doubao-seedance-1-0-lite-t2v-250428", result.UpstreamModel)
+	require.Equal(t, VideoBillingResolution720P, result.VideoResolution)
+	require.Equal(t, 5, result.VideoDurationSeconds)
+}
+
+func TestForwardGrokVideoVolcengineArkAdapterProxiesSignedContentWithoutCredential(t *testing.T) {
+	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/videos/task_123/content", nil)
+	account := &Account{
+		ID: 85, Name: "volcengine ark", Platform: PlatformGrok, Type: AccountTypeAPIKey, Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key": "ark-key", "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+			"video_adapter": "volcengine_ark",
+		},
+	}
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		{
+			StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(`{
+				"id":"task_123","model":"doubao-seedance-1-0-lite-t2v-250428",
+				"status":"succeeded","duration":5,
+				"content":{"video_url":"https://ark-content.volces.com/video/task_123.mp4?signature=test"}
+			}`)),
+		},
+		{
+			StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"video/mp4"}},
+			Body: io.NopCloser(strings.NewReader("MP4!")),
+		},
+	}}
+	svc := &OpenAIGatewayService{httpUpstream: upstream}
+
+	result, err := svc.ForwardGrokMedia(context.Background(), c, account, GrokMediaEndpointVideoContent, "task_123", nil, "")
+	require.NoError(t, err)
+	require.Len(t, upstream.requests, 2)
+	require.Equal(t, "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks/task_123", upstream.requests[0].URL.String())
+	require.Equal(t, "Bearer ark-key", upstream.requests[0].Header.Get("Authorization"))
+	require.Equal(t, "https://ark-content.volces.com/video/task_123.mp4?signature=test", upstream.requests[1].URL.String())
+	require.Empty(t, upstream.requests[1].Header.Get("Authorization"))
+	require.Equal(t, "MP4!", recorder.Body.String())
+	require.Equal(t, "task_123", result.ResponseID)
+	require.Equal(t, 1, result.VideoCount)
+	require.Equal(t, 5, result.VideoDurationSeconds)
+}

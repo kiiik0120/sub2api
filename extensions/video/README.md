@@ -37,6 +37,7 @@ The initial adapters are:
 | --- | --- | --- | --- |
 | `native` | `POST /videos/generations` | `GET /videos/{id}` | xAI signed URL or `GET /videos/{id}/content` |
 | `openai_videos` | `POST /videos` | `GET /videos/{id}` | `GET /videos/{id}/content` |
+| `volcengine_ark` | `POST /contents/generations/tasks` | `GET /contents/generations/tasks/{id}` | signed `content.video_url` |
 
 For `openai_videos`, Sub2API converts `duration` to `seconds`, derives the
 protocol size from `resolution` and `aspect_ratio`, converts the first Grok
@@ -63,6 +64,37 @@ Clients continue using Sub2API's existing routes:
 - `GET /v1/videos/{request_id}`
 - `GET /v1/videos/{request_id}/content`
 
+### Volcengine Ark / Doubao Seedance
+
+Use the Ark API root and map the public Grok model name to the Ark model ID:
+
+```json
+{
+  "platform": "grok",
+  "type": "apikey",
+  "credentials": {
+    "api_key": "ark-api-key",
+    "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+    "video_adapter": "volcengine_ark",
+    "model_mapping": {
+      "grok-imagine-video": "doubao-seedance-1-5-pro-251215"
+    }
+  }
+}
+```
+
+The adapter converts Grok's `prompt`, `aspect_ratio`, `resolution`, and
+`duration` fields into Ark's `content` request and prompt options. Ark task
+states and `content.video_url` are normalized to the Grok status/content
+contract; signed media URLs are fetched without the account API key.
+
+`doubao-seedance-1-0-lite-t2v-250428` is retained as a compatibility target for
+third-party relays. Its adapter contract pins/validates the historical model
+limits (5 or 10 seconds, 480p or 720p). Volcengine's LAS product discontinued
+the corresponding operator on 2026-05-11 and recommends
+`doubao-seedance-1-5-pro-251215`; confirm availability of the old model for the
+specific Ark account or relay before enabling it in production.
+
 ## Adding another provider
 
 Add one adapter implementation under `backend/internal/videoadapter` and
@@ -74,4 +106,3 @@ The `openai_videos` name describes the wire protocol, not a requirement to call
 OpenAI directly. As of 2026-09-11, OpenAI marks its Sora Videos API deprecated
 and scheduled for shutdown on 2026-09-24; the adapter remains useful for
 third-party gateways that implement that contract.
-

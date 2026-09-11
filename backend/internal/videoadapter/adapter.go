@@ -16,8 +16,9 @@ const CredentialKey = "video_adapter"
 type Kind string
 
 const (
-	KindNative       Kind = "native"
-	KindOpenAIVideos Kind = "openai_videos"
+	KindNative        Kind = "native"
+	KindOpenAIVideos  Kind = "openai_videos"
+	KindVolcengineArk Kind = "volcengine_ark"
 )
 
 type Operation string
@@ -37,6 +38,14 @@ type Adapter interface {
 	BuildURL(validatedBaseURL, requestID string, operation Operation) (string, error)
 	PrepareRequest(operation Operation, body []byte, contentType string) (PreparedRequest, error)
 	NormalizeResponse(operation Operation, body []byte, requestID, contentProxyURL string) ([]byte, error)
+	ResolveContent(validatedBaseURL, requestID string, statusBody []byte) (ContentRequest, error)
+}
+
+// ContentRequest tells the shared content proxy where the completed media is
+// stored and whether the account credential may be sent to that URL.
+type ContentRequest struct {
+	URL           string
+	Authenticated bool
 }
 
 // PreparedRequest includes the effective billable dimensions after protocol
@@ -74,6 +83,8 @@ func Resolve(credentials map[string]any) (adapter Adapter, enabled bool, err err
 		return nativeAdapter{}, false, nil
 	case KindOpenAIVideos:
 		return openAIVideosAdapter{}, true, nil
+	case KindVolcengineArk:
+		return volcengineArkAdapter{}, true, nil
 	default:
 		return nil, false, fmt.Errorf("unsupported %s type %q", CredentialKey, name)
 	}
@@ -94,6 +105,10 @@ func (nativeAdapter) PrepareRequest(_ Operation, body []byte, contentType string
 }
 func (nativeAdapter) NormalizeResponse(_ Operation, body []byte, _, _ string) ([]byte, error) {
 	return body, nil
+}
+func (a nativeAdapter) ResolveContent(baseURL, requestID string, _ []byte) (ContentRequest, error) {
+	value, err := a.BuildURL(baseURL, requestID, OperationContent)
+	return ContentRequest{URL: value, Authenticated: true}, err
 }
 
 type openAIVideosAdapter struct{}
@@ -192,6 +207,11 @@ func (openAIVideosAdapter) NormalizeResponse(operation Operation, body []byte, r
 		return nil, fmt.Errorf("encode Grok video response: %w", err)
 	}
 	return out, nil
+}
+
+func (a openAIVideosAdapter) ResolveContent(baseURL, requestID string, _ []byte) (ContentRequest, error) {
+	value, err := a.BuildURL(baseURL, requestID, OperationContent)
+	return ContentRequest{URL: value, Authenticated: true}, err
 }
 
 func buildURL(baseURL, requestID string, operation Operation, paths map[Operation]string) (string, error) {
