@@ -1,5 +1,9 @@
 # Multi-provider video adapters
 
+For the local implementation boundary, billing invariants, route interception
+point, and upstream-merge checklist, see
+[CUSTOM_VIDEO_ADAPTERS.md](CUSTOM_VIDEO_ADAPTERS.md).
+
 Sub2API exposes one Grok/xAI-compatible asynchronous video interface while an
 account-level adapter translates selected upstream protocols. Scheduling,
 account failover, request ownership, protected content proxying, and deferred
