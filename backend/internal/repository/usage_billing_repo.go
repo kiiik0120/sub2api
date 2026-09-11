@@ -14,9 +14,9 @@ import (
 )
 
 type usageBillingRepository struct {
-	db          *sql.DB
-	usageLogs   service.UsageLogRepository
-	koxBilling  *koxbilling.Service
+	db         *sql.DB
+	usageLogs  service.UsageLogRepository
+	koxBilling *koxbilling.Service
 }
 
 func NewUsageBillingRepository(_ *dbent.Client, sqlDB *sql.DB, deps ...any) service.UsageBillingRepository {
@@ -89,23 +89,23 @@ func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBi
 			ReservationID:     "sub2api:" + cmd.RequestID,
 			BusinessCode:      "gateway.usage",
 			Model:             cmd.Model,
-			BillingType:      koxBillingTypeName(cmd.BillingType, cmd.BillingMode),
-			ActualCost:       koxCost,
-			InputTokens:      cmd.InputTokens,
-			OutputTokens:     cmd.OutputTokens,
-			CacheReadTokens:  cmd.CacheReadTokens,
-			CacheWriteTokens: cmd.CacheCreationTokens,
-			Currency:         "USD",
-			Status:           "succeeded",
+			BillingType:       koxBillingTypeName(cmd.BillingType, cmd.BillingMode),
+			ActualCost:        koxCost,
+			InputTokens:       cmd.InputTokens,
+			OutputTokens:      cmd.OutputTokens,
+			CacheReadTokens:   cmd.CacheReadTokens,
+			CacheWriteTokens:  cmd.CacheCreationTokens,
+			Currency:          "USD",
+			Status:            "succeeded",
 			Metadata: map[string]any{
-				"total_cost":               cmd.TotalCost,
-				"billing_mode":             cmd.BillingMode,
-				"rate_multiplier":          cmd.RateMultiplier,
-				"account_rate_multiplier":  cmd.AccountRateMultiplier,
-				"requested_model":          cmd.RequestedModel,
-				"upstream_model":           cmd.UpstreamModel,
-				"group_id":                 int64PtrValue(cmd.GroupID),
-				"subscription_id":          int64PtrValue(cmd.SubscriptionID),
+				"total_cost":              cmd.TotalCost,
+				"billing_mode":            cmd.BillingMode,
+				"rate_multiplier":         cmd.RateMultiplier,
+				"account_rate_multiplier": cmd.AccountRateMultiplier,
+				"requested_model":         cmd.RequestedModel,
+				"upstream_model":          cmd.UpstreamModel,
+				"group_id":                int64PtrValue(cmd.GroupID),
+				"subscription_id":         int64PtrValue(cmd.SubscriptionID),
 			},
 		})
 		if err != nil {
@@ -119,7 +119,6 @@ func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBi
 	tx = nil
 	return result, nil
 }
-
 
 func koxBillingTypeName(v int8, mode string) string {
 	if strings.TrimSpace(mode) != "" {

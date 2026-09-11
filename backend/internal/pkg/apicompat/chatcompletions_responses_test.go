@@ -1621,34 +1621,106 @@ func TestBufferedResponseAccumulator_ToolCalls(t *testing.T) {
 	assert.Equal(t, `{"city":"NYC"}`, output[0].Arguments)
 }
 
-func TestBufferedResponseAccumulator_PreservesAgentAuthors(t *testing.T) {
+func TestResponsesEventToChatChunks_FunctionArgumentsDoneWithoutDeltas(t *testing.T) {
+	state := NewResponsesEventToChatState()
+	state.Model = "gpt-5-codex"
+	state.SentRole = true
+
+	chunks := ResponsesEventToChatChunks(&ResponsesStreamEvent{
+		Type:        "response.output_item.added",
+		OutputIndex: 1,
+		Item: &ResponsesOutput{
+			Type:      "function_call",
+			CallID:    "call_lookup",
+			Name:      "lookup_item",
+			Arguments: "",
+		},
+	}, state)
+	require.Len(t, chunks, 1)
+
+	chunks = ResponsesEventToChatChunks(&ResponsesStreamEvent{
+		Type:        "response.function_call_arguments.done",
+		OutputIndex: 1,
+		CallID:      "call_lookup",
+		Name:        "lookup_item",
+		Arguments:   `{"id":1}`,
+	}, state)
+	require.Len(t, chunks, 1)
+	require.Len(t, chunks[0].Choices[0].Delta.ToolCalls, 1)
+	assert.Equal(t, `{"id":1}`, chunks[0].Choices[0].Delta.ToolCalls[0].Function.Arguments)
+}
+
+func TestResponsesEventToChatChunks_FunctionArgumentsDoneDoesNotDuplicateDeltas(t *testing.T) {
+	state := NewResponsesEventToChatState()
+	state.Model = "gpt-5-codex"
+	state.SentRole = true
+
+	ResponsesEventToChatChunks(&ResponsesStreamEvent{
+		Type:        "response.output_item.added",
+		OutputIndex: 0,
+		Item:        &ResponsesOutput{Type: "function_call", CallID: "call_lookup", Name: "lookup_item"},
+	}, state)
+	chunks := ResponsesEventToChatChunks(&ResponsesStreamEvent{
+		Type:        "response.function_call_arguments.delta",
+		OutputIndex: 0,
+		Delta:       `{"id":1}`,
+	}, state)
+	require.Len(t, chunks, 1)
+
+	chunks = ResponsesEventToChatChunks(&ResponsesStreamEvent{
+		Type:        "response.function_call_arguments.done",
+		OutputIndex: 0,
+		Arguments:   `{"id":1}`,
+	}, state)
+	assert.Empty(t, chunks)
+}
+
+func TestBufferedResponseAccumulator_FunctionArgumentsDoneWithoutDeltas(t *testing.T) {
+	acc := NewBufferedResponseAccumulator()
+	acc.ProcessEvent(&ResponsesStreamEvent{
+		Type:        "response.output_item.added",
+		OutputIndex: 1,
+		Item:        &ResponsesOutput{Type: "function_call", CallID: "call_lookup", Name: "lookup_item"},
+	})
+	acc.ProcessEvent(&ResponsesStreamEvent{
+		Type:        "response.function_call_arguments.done",
+		OutputIndex: 1,
+		Arguments:   `{"id":1}`,
+	})
+
+	resp := &ResponsesResponse{Output: []ResponsesOutput{{
+		Type:      "function_call",
+		CallID:    "call_lookup",
+		Name:      "lookup_item",
+		Arguments: "",
+	}}}
+	acc.SupplementResponseOutput(resp)
+
+	require.Len(t, resp.Output, 1)
+	assert.Equal(t, `{"id":1}`, resp.Output[0].Arguments)
+}
+
+func TestBufferedResponseAccumulator_FunctionArgumentsDoneReplacesDeltas(t *testing.T) {
 	acc := NewBufferedResponseAccumulator()
 	acc.ProcessEvent(&ResponsesStreamEvent{
 		Type:        "response.output_item.added",
 		OutputIndex: 0,
-		Item:        &ResponsesOutput{Type: "message", Author: "agent-message"},
-	})
-	acc.ProcessEvent(&ResponsesStreamEvent{Type: "response.output_text.delta", Delta: "done"})
-	acc.ProcessEvent(&ResponsesStreamEvent{
-		Type:        "response.output_item.added",
-		OutputIndex: 1,
-		Item: &ResponsesOutput{
-			Type:   "function_call",
-			CallID: "call_1",
-			Name:   "spawn_agent",
-			Author: "agent-tool",
-		},
+		Item:        &ResponsesOutput{Type: "function_call", CallID: "call_lookup", Name: "lookup_item"},
 	})
 	acc.ProcessEvent(&ResponsesStreamEvent{
 		Type:        "response.function_call_arguments.delta",
-		OutputIndex: 1,
-		Delta:       `{}`,
+		OutputIndex: 0,
+		Delta:       `{"id":1}`,
+	})
+	acc.ProcessEvent(&ResponsesStreamEvent{
+		Type:        "response.function_call_arguments.done",
+		OutputIndex: 0,
+		Arguments:   `{"id":1}`,
 	})
 
 	output := acc.BuildOutput()
-	require.Len(t, output, 2)
-	require.Equal(t, "agent-message", output[0].Author)
-	require.Equal(t, "agent-tool", output[1].Author)
+	require.Len(t, output, 1)
+	assert.Equal(t, `{"id":1}`, output[0].Arguments)
 }
 
 func TestBufferedResponseAccumulator_Reasoning(t *testing.T) {

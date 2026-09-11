@@ -41,9 +41,9 @@ const (
 type Service struct {
 	db                                     *sql.DB
 	internalKey, webhookSecret, webhookURL string
-	gatewayUserID, gatewayGroupID           int64
-	workerID                                string
-	client                                  *http.Client
+	gatewayUserID, gatewayGroupID          int64
+	workerID                               string
+	client                                 *http.Client
 }
 type CreateKeyInput struct {
 	KoxCompanyID string `json:"kox_company_id"`
@@ -113,7 +113,9 @@ func New(db *sql.DB) *Service {
 	return &Service{db: db, internalKey: strings.TrimSpace(os.Getenv(internalAPIKeyEnv)), webhookSecret: strings.TrimSpace(os.Getenv(webhookSecretEnv)), webhookURL: strings.TrimSpace(os.Getenv(webhookURLEnv)), gatewayUserID: userID, gatewayGroupID: groupID, workerID: uuid.NewString(), client: &http.Client{Timeout: koxWebhookTimeout}}
 }
 
-func (s *Service) Enabled() bool { return s != nil && s.db != nil && s.internalKey != "" && s.gatewayUserID > 0 && s.gatewayGroupID > 0 }
+func (s *Service) Enabled() bool {
+	return s != nil && s.db != nil && s.internalKey != "" && s.gatewayUserID > 0 && s.gatewayGroupID > 0
+}
 func (s *Service) Authorize(value string) bool {
 	if !s.Enabled() {
 		return false

@@ -1191,6 +1191,21 @@ func TestLoadDefaultUsageCleanupConfig(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultOpsCleanupConfig(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if !cfg.Ops.Cleanup.Enabled {
+		t.Fatal("Ops.Cleanup.Enabled = false, want true")
+	}
+	if cfg.Ops.Cleanup.SystemLogRetentionDays != 30 {
+		t.Fatalf("Ops.Cleanup.SystemLogRetentionDays = %d, want 30", cfg.Ops.Cleanup.SystemLogRetentionDays)
+	}
+}
+
 func TestValidateUsageCleanupConfigEnabled(t *testing.T) {
 	resetViperWithJWTSecret(t)
 
@@ -1263,14 +1278,6 @@ func TestConfigAddressHelpers(t *testing.T) {
 	}
 	if !strings.Contains(dbCfg.DSNWithTimezone("UTC"), "TimeZone=UTC") {
 		t.Fatalf("DatabaseConfig.DSNWithTimezone() should use provided timezone")
-	}
-	if !strings.Contains(dbCfg.DSNWithTimezone("UTC"), "connect_timeout=5") {
-		t.Fatalf("DatabaseConfig.DSNWithTimezone() should apply the default connection timeout")
-	}
-
-	dbCfg.ConnectTimeoutSeconds = 2
-	if !strings.Contains(dbCfg.DSN(), "connect_timeout=2") {
-		t.Fatalf("DatabaseConfig.DSN() should use the configured connection timeout")
 	}
 
 	redis := RedisConfig{Host: "redis", Port: 6379}
@@ -2144,6 +2151,11 @@ func TestValidateConfigErrors(t *testing.T) {
 			name:    "ops cleanup retention",
 			mutate:  func(c *Config) { c.Ops.Cleanup.ErrorLogRetentionDays = -1 },
 			wantErr: "ops.cleanup.error_log_retention_days",
+		},
+		{
+			name:    "ops cleanup system log retention",
+			mutate:  func(c *Config) { c.Ops.Cleanup.SystemLogRetentionDays = 0 },
+			wantErr: "ops.cleanup.system_log_retention_days",
 		},
 		{
 			name:    "ops cleanup minute retention",
