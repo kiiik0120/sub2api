@@ -329,6 +329,32 @@ func TestBuildSchedulerMetadataAccount_KeepsOpenAIWSFlags(t *testing.T) {
 	require.Nil(t, got.Extra["unused_large_field"])
 }
 
+func TestBuildSchedulerMetadataAccount_KeepsSeedanceCapability(t *testing.T) {
+	account := service.Account{
+		ID:       45,
+		Platform: service.PlatformOpenAI,
+		Type:     service.AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key":             "secret-key",
+			"base_url":            "https://example.com/v1",
+			"openai_capabilities": []any{"chat_completions", "seedance"},
+			"unused_large_field":  "drop-me",
+		},
+	}
+
+	got := buildSchedulerMetadataAccount(account)
+
+	restoredPayload, err := json.Marshal(got)
+	require.NoError(t, err)
+	var restored service.Account
+	require.NoError(t, json.Unmarshal(restoredPayload, &restored))
+
+	require.Equal(t, "https://example.com/v1", restored.Credentials["base_url"])
+	require.Equal(t, []any{"chat_completions", "seedance"}, restored.Credentials["openai_capabilities"])
+	require.Nil(t, restored.Credentials["unused_large_field"])
+	require.True(t, restored.SupportsOpenAIEndpointCapability(service.OpenAIEndpointCapabilitySeedance))
+}
+
 func TestBuildSchedulerMetadataAccount_KeepsGrokMediaEligibility(t *testing.T) {
 	t.Run("explicit override", func(t *testing.T) {
 		account := service.Account{
