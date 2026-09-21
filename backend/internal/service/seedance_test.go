@@ -42,6 +42,18 @@ func TestSeedanceNativeForwarding(t *testing.T) {
 	}
 }
 
+func TestSeedanceNativeForwardingCapturesOutputTokenPrice(t *testing.T) {
+	body := []byte(`{"model":"doubao-seedance-2-0-260128","content":[{"type":"text","text":"extend this"},{"type":"video_url","video_url":{"url":"https://example.com/source.mp4"}}],"resolution":"4k"}`)
+	upstream := &grokMediaContentUpstreamStub{response: grokMediaContentStatusResponse(`{"id":"task-1"}`)}
+	svc := &OpenAIGatewayService{httpUpstream: upstream}
+	c, _ := grokMediaContentTestContext(http.MethodPost, "/api/v3/contents/generations/tasks", nil)
+
+	result, err := svc.ForwardSeedance(context.Background(), c, seedanceTestAccount(), SeedanceEndpointCreate, "", body)
+	require.NoError(t, err)
+	require.NotNil(t, result.OutputTokenPricePerTokenOverride)
+	require.InDelta(t, 2.24e-6, *result.OutputTokenPricePerTokenOverride, 1e-12)
+}
+
 func TestSeedanceStatusAndDelete(t *testing.T) {
 	for _, status := range []string{"queued", "running", "failed", "cancelled", "expired", "succeeded"} {
 		t.Run(status, func(t *testing.T) {
@@ -76,8 +88,11 @@ func TestSeedanceValidationAndCapability(t *testing.T) {
 		_, err := ParseSeedanceRequest([]byte(body))
 		require.Error(t, err)
 	}
-	info, err := ParseSeedanceRequest([]byte(`{"model":"x","content":[{"type":"text","text":"first"},{"type":"text","text":"second"},{"type":"image_url","image_url":{"url":"https://example.com/a.png"}}]}`))
+	info, err := ParseSeedanceRequest([]byte(`{"model":"x","resolution":"4k","generate_audio":true,"content":[{"type":"text","text":"first"},{"type":"text","text":"second"},{"type":"image_url","image_url":{"url":"https://example.com/a.png"}},{"type":"video_url","video_url":{"url":"https://example.com/a.mp4"}}]}`))
 	require.NoError(t, err)
+	require.Equal(t, "4k", info.Resolution)
+	require.True(t, info.InputContainsVideo)
+	require.True(t, info.GenerateAudio)
 	require.Contains(t, string(info.ModerationBody()), "first")
 	require.Contains(t, string(info.ModerationBody()), "second")
 	require.Contains(t, string(info.ModerationBody()), "https://example.com/a.png")

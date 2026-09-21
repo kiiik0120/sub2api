@@ -41,6 +41,8 @@ func ParseSeedanceRequest(body []byte) (GrokMediaRequestInfo, error) {
 		return info, fmt.Errorf("content must be a non-empty array")
 	}
 	info.Model = strings.TrimSpace(model.String())
+	info.Resolution = normalizeSeedanceVideoResolution(gjson.GetBytes(body, "resolution").String())
+	info.GenerateAudio = gjson.GetBytes(body, "generate_audio").Bool()
 	var texts []string
 	for _, item := range content.Array() {
 		switch item.Get("type").String() {
@@ -48,6 +50,8 @@ func ParseSeedanceRequest(body []byte) (GrokMediaRequestInfo, error) {
 			texts = append(texts, item.Get("text").String())
 		case "image_url":
 			info.InputImageURLs = append(info.InputImageURLs, item.Get("image_url.url").String())
+		case "video_url":
+			info.InputContainsVideo = true
 		}
 	}
 	info.Prompt = strings.Join(texts, "\n")
@@ -85,6 +89,7 @@ func (s *OpenAIGatewayService) ForwardSeedance(ctx context.Context, c *gin.Conte
 		return nil, err
 	}
 	model, upstreamModel := "", ""
+	var requestInfo GrokMediaRequestInfo
 	method := http.MethodGet
 	switch endpoint {
 	case SeedanceEndpointCreate:
@@ -92,6 +97,7 @@ func (s *OpenAIGatewayService) ForwardSeedance(ctx context.Context, c *gin.Conte
 		if parseErr != nil {
 			return nil, parseErr
 		}
+		requestInfo = info
 		model = info.Model
 		upstreamModel = account.GetMappedModel(model)
 		body, err = sjson.SetBytes(body, "model", upstreamModel)
@@ -137,6 +143,12 @@ func (s *OpenAIGatewayService) ForwardSeedance(ctx context.Context, c *gin.Conte
 	}
 	result := &OpenAIForwardResult{Model: model, BillingModel: model, UpstreamModel: upstreamModel, Duration: time.Since(started), ResponseHeaders: resp.Header.Clone()}
 	if endpoint == SeedanceEndpointCreate {
+		for _, candidate := range []string{upstreamModel, model} {
+			if price, ok := ResolveSeedanceVideoOutputPricePerToken(candidate, requestInfo.Resolution, requestInfo.InputContainsVideo, requestInfo.GenerateAudio, started); ok {
+				result.OutputTokenPricePerTokenOverride = &price
+				break
+			}
+		}
 		id := strings.TrimSpace(gjson.GetBytes(responseBody, "id").String())
 		if id == "" {
 			return nil, fmt.Errorf("seedance create response missing task ID")

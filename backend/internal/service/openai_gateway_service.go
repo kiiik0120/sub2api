@@ -285,6 +285,10 @@ type OpenAIForwardResult struct {
 	ImageSizeBreakdown    map[string]int
 	VideoCount            int
 	VideoResolution       string
+	// OutputTokenPricePerTokenOverride is fixed when an asynchronous provider
+	// accepts the task. It preserves request-only pricing attributes until the
+	// successful status response supplies completion_tokens.
+	OutputTokenPricePerTokenOverride *float64
 	// VideoDurationSeconds 是提交时请求的生成时长（xAI 按输出秒数计费），已归一化到 1-15 秒。
 	VideoDurationSeconds int
 	// WebSearchCalls 是 Codex alpha/search 网页搜索调用次数（每次成功请求为 1）。

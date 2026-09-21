@@ -4,10 +4,12 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"log"
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
@@ -56,6 +58,80 @@ func TestCalculateCost_BasicComputation(t *testing.T) {
 	require.InDelta(t, expectedOutput, cost.OutputCost, 1e-10)
 	require.InDelta(t, expectedInput+expectedOutput, cost.TotalCost, 1e-10)
 	require.InDelta(t, expectedInput+expectedOutput, cost.ActualCost, 1e-10)
+}
+
+func TestResolveSeedanceVideoOutputPricePerToken(t *testing.T) {
+	before25DiscountEnd := time.Date(2026, time.September, 17, 13, 59, 0, 0, time.FixedZone("CST", 8*60*60))
+	after25DiscountEnd := time.Date(2026, time.September, 21, 0, 0, 0, 0, time.FixedZone("CST", 8*60*60))
+
+	tests := []struct {
+		name               string
+		model              string
+		resolution         string
+		inputContainsVideo bool
+		generateAudio      bool
+		pricingAt          time.Time
+		want               float64
+	}{
+		{name: "cdance 2.0 720p", model: "cdance2.0-0611", resolution: "720p", pricingAt: after25DiscountEnd, want: 6.44e-6},
+		{name: "2.0 4k video input", model: "doubao-seedance-2-0-260128", resolution: "4k", inputContainsVideo: true, pricingAt: after25DiscountEnd, want: 2.24e-6},
+		{name: "2.0 fast", model: "doubao-seedance-2.0-fast", resolution: "720p", pricingAt: after25DiscountEnd, want: 5.18e-6},
+		{name: "2.0 mini video input", model: "doubao-seedance-2.0-mini", resolution: "480p", inputContainsVideo: true, pricingAt: after25DiscountEnd, want: 1.96e-6},
+		{name: "2.5 launch discount", model: "doubao-seedance-2.5", resolution: "1080p", pricingAt: before25DiscountEnd, want: 7.7616e-6},
+		{name: "2.5 list price after discount", model: "doubao-seedance-2.5", resolution: "1080p", pricingAt: after25DiscountEnd, want: 10.78e-6},
+		{name: "1.5 pro with audio", model: "doubao-seedance-1.5-pro", generateAudio: true, pricingAt: after25DiscountEnd, want: 2.24e-6},
+		{name: "1.5 pro silent", model: "doubao-seedance-1.5-pro", pricingAt: after25DiscountEnd, want: 1.12e-6},
+		{name: "1.0 pro", model: "doubao-seedance-1.0-pro", pricingAt: after25DiscountEnd, want: 2.1e-6},
+		{name: "1.0 pro fast", model: "doubao-seedance-1.0-pro-fast", pricingAt: after25DiscountEnd, want: 0.588e-6},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := ResolveSeedanceVideoOutputPricePerToken(tt.model, tt.resolution, tt.inputContainsVideo, tt.generateAudio, tt.pricingAt)
+			require.True(t, ok)
+			require.InDelta(t, tt.want, got, 1e-12)
+		})
+	}
+
+	_, ok := ResolveSeedanceVideoOutputPricePerToken("doubao-seedance-2.0-fast", "1080p", false, false, after25DiscountEnd)
+	require.False(t, ok, "unsupported model-resolution combinations must not be priced")
+}
+
+func TestCalculateOutputTokenCost(t *testing.T) {
+	cost := CalculateOutputTokenCost(108900, 6.44e-6, 1)
+	require.Zero(t, cost.InputCost)
+	require.InDelta(t, 0.701316, cost.OutputCost, 1e-12)
+	require.InDelta(t, 0.701316, cost.TotalCost, 1e-12)
+	require.InDelta(t, 0.701316, cost.ActualCost, 1e-12)
+}
+
+func TestCalculateOpenAIRecordUsageCost_UsesSeedanceTaskRate(t *testing.T) {
+	price, ok := ResolveSeedanceVideoOutputPricePerToken(
+		"doubao-seedance-2.0", "720p", false, false, time.Date(2026, time.September, 21, 0, 0, 0, 0, time.UTC),
+	)
+	require.True(t, ok)
+
+	svc := &OpenAIGatewayService{}
+	cost, err := svc.calculateOpenAIRecordUsageCost(
+		context.Background(),
+		&OpenAIForwardResult{
+			Usage:                            OpenAIUsage{OutputTokens: 108900},
+			OutputTokenPricePerTokenOverride: &price,
+		},
+		&APIKey{},
+		[]string{"unmapped-seedance-alias"},
+		1.5,
+		1,
+		1,
+		1,
+		UsageTokens{},
+		"",
+		nil,
+		time.Time{},
+	)
+	require.NoError(t, err)
+	require.InDelta(t, 0.701316, cost.TotalCost, 1e-12)
+	require.InDelta(t, 1.051974, cost.ActualCost, 1e-12)
 }
 
 func TestCalculateCost_WithCacheTokens(t *testing.T) {

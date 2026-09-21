@@ -38,8 +38,11 @@ curl -X DELETE "$SUB2API_BASE_URL/api/v3/contents/generations/tasks/$TASK_ID" \
 
 - 查询和删除只能访问同一用户、同一 API Key、同一分组创建的任务，并始终使用原提交账号；不会转到其他账号查询。
 - 创建时不扣 token 用量。首次查询到 `succeeded` 后，根据上游 `usage.completion_tokens` 计费；重复查询由共享缓存声明和持久化用量去重共同保护。失败、排队及运行中的任务不计费。
+- 未配置分组/渠道模型价格时，内置火山视频模型单价会在创建任务时按请求快照确定，并在任务状态中保留至结算：`resolution`、是否包含 `video_url` 参考视频、以及 `generate_audio`。状态响应通常只提供 `completion_tokens`，不能在结算时重新推断这些字段。
+- 内置定价覆盖 `doubao-seedance-2.5`、`doubao-seedance-2.0`、`doubao-seedance-2.0-fast`、`doubao-seedance-2.0-mini`、`doubao-seedance-1.5-pro`、`doubao-seedance-1.0-pro` 与 `doubao-seedance-1.0-pro-fast`，并兼容 `cdance2.0-0611`。`2.0` 系列支持 `480p`、`720p`、`1080p` 和 `4k`；其他模型按火山方舟当期支持的分辨率匹配。
+- 显式配置的分组/渠道模型 token 单价始终优先于内置单价。火山官方的部分优惠价取决于企业资格或累计 token 额度；由于任务请求不包含该资格信息，默认使用官方标准价。符合优惠资格的部署应在对应渠道配置覆盖单价。
 - Redis 保存任务绑定及创建时的模型快照，默认 24 小时。需保留 Redis 状态并在有效期内查询完成结果。当前不会后台轮询；只使用回调而不查询的任务不会自动结算。
 - 不开放上游的任务列表接口，防止共享账号的任务泄露给其他用户。删除遵循上游语义，不自动退款。
 - 异步创建的上游错误不自动重试，以免重复创建付费任务。
 
-协议依据：[火山官方 Go SDK](https://github.com/volcengine/volcengine-go-sdk/blob/master/service/arkruntime/model/content_generation.go)、[创建任务文档](https://www.volcengine.com/docs/82379/1520757)、[查询任务文档](https://www.volcengine.com/docs/82379/1521309)。
+协议依据：[火山官方 Go SDK](https://github.com/volcengine/volcengine-go-sdk/blob/master/service/arkruntime/model/content_generation.go)、[创建任务文档](https://www.volcengine.com/docs/82379/1520757)、[查询任务文档](https://www.volcengine.com/docs/82379/1521309)、[模型价格文档](https://ark.volcengine.com/region:cn-beijing/docs/ark/model-pricing?lang=zh)。

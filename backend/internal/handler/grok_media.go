@@ -478,12 +478,13 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			// model/duration/resolution so status can still price if upstream omits them.
 			// Retry once: missing pending causes silent underpricing (status omits resolution).
 			pending := service.GrokVideoPendingBilling{
-				Model:                requestModel,
-				BillingModel:         firstNonEmptyString(result.BillingModel, requestModel),
-				UpstreamModel:        result.UpstreamModel,
-				VideoResolution:      result.VideoResolution,
-				VideoDurationSeconds: result.VideoDurationSeconds,
-				OriginalModel:        clientRequestedModel(c, requestModel),
+				Model:                            requestModel,
+				BillingModel:                     firstNonEmptyString(result.BillingModel, requestModel),
+				UpstreamModel:                    result.UpstreamModel,
+				OutputTokenPricePerTokenOverride: result.OutputTokenPricePerTokenOverride,
+				VideoResolution:                  result.VideoResolution,
+				VideoDurationSeconds:             result.VideoDurationSeconds,
+				OriginalModel:                    clientRequestedModel(c, requestModel),
 				// Wall-clock start for usage duration_ms: create accepted → first done discovery.
 				CreatedAt: videoCreateStartedAt,
 			}

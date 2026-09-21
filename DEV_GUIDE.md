@@ -243,6 +243,37 @@ git add ent/       # 生成的文件也要提交
 - [ ] 所有 test stub 补全新接口方法（如果改了 interface）
 - [ ] Ent 生成的代码已提交（如果改了 schema）
 
+---
+
+### 坑 12：同步上游时保留火山 Seedance 原生计费改动
+
+本 Fork 为火山方舟异步视频任务补充了官方 token 计费。上游更新涉及 OpenAI 媒体转发、异步任务或 usage 结算时，必须检查这部分改动没有被覆盖或绕过。
+
+**本地改动边界**：
+
+| 文件 | 必须保留的职责 |
+|------|------|
+| `backend/internal/service/seedance_pricing.go` | 火山视频模型别名、按分辨率/参考视频/音频模式选择的输出 token 单价，以及官方限时活动窗口。 |
+| `backend/internal/service/seedance.go` | 创建任务时从原始请求提取 `resolution`、`video_url`、`generate_audio`，并固定本次任务使用的输出单价。 |
+| `backend/internal/service/openai_gateway_service.go` | `OpenAIForwardResult.OutputTokenPricePerTokenOverride` 字段，承载异步任务的单价快照。 |
+| `backend/internal/service/grok_media.go` | 待结算任务结构持久化该单价快照。 |
+| `backend/internal/handler/grok_media.go`、`backend/internal/handler/seedance.go` | 创建时写入待结算记录、成功状态查询时恢复单价快照。 |
+| `backend/internal/service/openai_gateway_usage.go` | 无显式渠道定价时，以快照单价乘 `usage.completion_tokens`；显式分组/渠道价格仍优先。 |
+
+**更新火山官方价格时**：
+
+1. 以火山方舟[模型价格文档](https://ark.volcengine.com/region:cn-beijing/docs/ark/model-pricing?lang=zh)为准，核对模型 ID、分辨率、是否参考视频、音频模式、单位和有效期。
+2. 更新 `seedance_pricing.go` 中的价格矩阵、别名或促销时间窗口。官方金额为人民币/百万 token；代码统一换算为美元/token，勿直接填入人民币单价。
+3. 若优惠依赖企业资格、地域、累计用量或其他请求中不存在的条件，默认保留标准价；仅对可由任务数据可靠判断的条件写自动规则。符合条件的部署用渠道模型价格覆盖。
+4. 新增或修改矩阵项时，同步更新 `TestResolveSeedanceVideoOutputPricePerToken`，至少覆盖正常价格、边界分辨率、参考视频/音频差异和促销起止边界。
+5. 执行：
+   ```bash
+   cd backend
+   go test -tags=unit ./internal/service -run 'TestResolveSeedanceVideoOutputPricePerToken|TestCalculateOutputTokenCost|TestCalculateOpenAIRecordUsageCost_UsesSeedanceTaskRate|TestSeedanceNativeForwarding|TestSeedanceStatusAndDelete' -count=1
+   ```
+
+**合并上游冲突时**：不要把任务创建时的价格计算移动到状态查询阶段。方舟完成状态仅能可靠提供 `completion_tokens`，创建请求中的分辨率、参考视频和音频选项必须随待结算任务保存，才能保证结算使用原始请求对应的价格。
+
 ## 五、常用命令速查
 
 ### 数据库操作
