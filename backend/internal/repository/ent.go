@@ -15,7 +15,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	localmigrations "github.com/Wei-Shaw/sub2api/local-migrations"
-	"github.com/Wei-Shaw/sub2api/migrations"
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
@@ -137,7 +136,7 @@ func InitEnt(cfg *config.Config) (*ent.Client, *sql.DB, error) {
 	migrationCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	if err := initializeDatabaseWithRetry(migrationCtx, func(ctx context.Context) error {
-		return applyMigrationsFS(ctx, drv.DB(), migrations.FS)
+		return ApplyMigrations(ctx, drv.DB())
 	}); err != nil {
 		_ = drv.Close() // 迁移失败时关闭驱动，避免资源泄露
 		return nil, nil, err
@@ -162,21 +161,25 @@ func InitEnt(cfg *config.Config) (*ent.Client, *sql.DB, error) {
 		return nil, nil, fmt.Errorf("validate config after secret bootstrap: %w", err)
 	}
 
-	// SIMPLE 模式：启动时补齐各平台默认分组。
-	// - anthropic/openai/gemini: 确保存在 <platform>-default
-	// - antigravity: 仅要求存在 >=2 个未软删除分组（用于 claude/gemini 混合调度场景）
-	if cfg.RunMode == config.RunModeSimple {
-		seedCtx, seedCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer seedCancel()
-		if err := ensureSimpleModeDefaultGroups(seedCtx, client); err != nil {
-			_ = client.Close()
-			return nil, nil, err
-		}
-		if err := ensureSimpleModeAdminConcurrency(seedCtx, client); err != nil {
-			_ = client.Close()
-			return nil, nil, err
-		}
+	seedCtx, seedCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer seedCancel()
+	if err := ensureSimpleModeStartup(seedCtx, client, cfg); err != nil {
+		_ = client.Close()
+		return nil, nil, err
 	}
 
 	return client, drv.DB(), nil
+}
+
+// ensureSimpleModeStartup keeps admin concurrency setup independent of group seeding.
+func ensureSimpleModeStartup(ctx context.Context, client *ent.Client, cfg *config.Config) error {
+	if cfg.RunMode != config.RunModeSimple {
+		return nil
+	}
+	if cfg.SimpleMode.AutoCreateDefaultGroups {
+		if err := ensureSimpleModeDefaultGroups(ctx, client); err != nil {
+			return err
+		}
+	}
+	return ensureSimpleModeAdminConcurrency(ctx, client)
 }

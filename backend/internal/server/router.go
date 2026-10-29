@@ -37,8 +37,12 @@ func SetupRouter(
 	compositeResolver *service.CompositeRouteResolver,
 	cfg *config.Config,
 	redisClient *redis.Client,
-	koxBilling *koxbilling.Service,
+	koxBillings ...*koxbilling.Service,
 ) *gin.Engine {
+	var koxBilling *koxbilling.Service
+	if len(koxBillings) > 0 {
+		koxBilling = koxBillings[0]
+	}
 	middleware2.SetIngressRejectRecorder(opsService)
 	// 缓存 iframe 页面的 origin 列表，用于动态注入 CSP frame-src
 	var cachedFrameOrigins atomic.Pointer[[]string]
@@ -133,7 +137,7 @@ func registerRoutes(
 	routes.RegisterModelPlazaRoutes(v1, h, optionalJWTAuth, settingService, panelRateLimiter)
 	routes.RegisterAdminRoutes(v1, h, adminAuth, auditLog, stepUpAuth, settingService, panelRateLimiter)
 	routes.RegisterGatewayRoutes(r, h, apiKeyAuth, apiKeyService, subscriptionService, opsService, settingService, compositeResolver, cfg)
-	routes.RegisterPaymentRoutes(v1, h.Payment, h.PaymentWebhook, h.Admin.Payment, jwtAuth, adminAuth, auditLog, settingService, panelRateLimiter)
+	routes.RegisterPaymentRoutes(v1, h.Payment, h.PaymentWebhook, h.Admin.Payment, jwtAuth, adminAuth, auditLog, settingService, panelRateLimiter, redisClient)
 
 	handler.RegisterPageRoutes(v1, cfg.Pricing.DataDir, gin.HandlerFunc(jwtAuth), gin.HandlerFunc(adminAuth), settingService)
 }

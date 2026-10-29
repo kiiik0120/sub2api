@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,14 @@ func (e GrokMediaEndpoint) IsSeedance() bool {
 // SeedanceTaskKey isolates ownership and billing keys from other video providers.
 func SeedanceTaskKey(id string) string { return "seedance:" + strings.TrimSpace(id) }
 
+func parseOpenAIVideoSeconds(value string) (int, error) {
+	seconds, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || seconds < 1 || seconds > 15 {
+		return 0, fmt.Errorf("duration must be an integer between 1 and 15 seconds")
+	}
+	return seconds, nil
+}
+
 func ParseSeedanceRequest(body []byte) (GrokMediaRequestInfo, error) {
 	var info GrokMediaRequestInfo
 	if !gjson.ValidBytes(body) || !gjson.ParseBytes(body).IsObject() {
@@ -41,7 +50,12 @@ func ParseSeedanceRequest(body []byte) (GrokMediaRequestInfo, error) {
 		return info, fmt.Errorf("content must be a non-empty array")
 	}
 	info.Model = strings.TrimSpace(model.String())
-	info.Resolution = normalizeSeedanceVideoResolution(gjson.GetBytes(body, "resolution").String())
+	if duration := firstNonEmpty(gjson.GetBytes(body, "duration").String(), gjson.GetBytes(body, "seconds").String()); duration != "" {
+		// Native Ark accepts provider-specific durations, including -1 (auto).
+		// OpenAI-compatible endpoints validate their own 1-15 second range.
+		info.DurationSeconds, _ = strconv.Atoi(strings.TrimSpace(duration))
+	}
+	info.Resolution = normalizeSeedanceVideoResolution(firstNonEmpty(gjson.GetBytes(body, "resolution").String(), gjson.GetBytes(body, "size").String()))
 	info.GenerateAudio = gjson.GetBytes(body, "generate_audio").Bool()
 	var texts []string
 	for _, item := range content.Array() {

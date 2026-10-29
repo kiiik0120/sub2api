@@ -41,6 +41,13 @@ services:
       - SERVER_MODE=${SERVER_MODE:-release}
       - ENABLE_SERVER_TIMING=${ENABLE_SERVER_TIMING:-false}
       - RUN_MODE=${RUN_MODE:-standard}
+      - KOX_BILLING_INTERNAL_API_KEY=${KOX_BILLING_INTERNAL_API_KEY:-}
+      - KOX_GATEWAY_USER_ID=${KOX_GATEWAY_USER_ID:-}
+      - KOX_GATEWAY_GROUP_ID=${KOX_GATEWAY_GROUP_ID:-}
+      - SUB2API_WEBHOOK_URL=${SUB2API_WEBHOOK_URL:-}
+      - SUB2API_WEBHOOK_SECRET=${SUB2API_WEBHOOK_SECRET:-}
+      - SIMPLE_MODE_AUTO_CREATE_DEFAULT_GROUPS=${SIMPLE_MODE_AUTO_CREATE_DEFAULT_GROUPS:-}
+      - SIMPLE_MODE_KEY_RATE_LIMIT_ENABLED=${SIMPLE_MODE_KEY_RATE_LIMIT_ENABLED:-false}
       - UPDATE_GITHUB_TOKEN=${UPDATE_GITHUB_TOKEN:-}
 
       # =======================================================================
@@ -72,7 +79,7 @@ services:
       # =======================================================================
       # Admin Account (auto-created on first run)
       # =======================================================================
-      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@sub2api.local}
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
 
       # =======================================================================

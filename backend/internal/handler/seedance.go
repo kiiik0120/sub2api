@@ -4,6 +4,7 @@ import (
 	"context"
 	"mime"
 	"net/http"
+	"strings"
 	"time"
 
 	middleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -11,7 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// SeedanceTasks exposes Ark's native asynchronous video task protocol.
+// SeedanceTasks exposes the Ark-compatible asynchronous video task protocol.
 func (h *OpenAIGatewayHandler) SeedanceTasks(c *gin.Context) {
 	if c.Request.Method == http.MethodPost && c.GetHeader("Content-Type") != "" {
 		mediaType, _, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
@@ -29,7 +30,10 @@ func (h *OpenAIGatewayHandler) SeedanceTasks(c *gin.Context) {
 	setActualUpstreamEndpoint(c, EndpointSeedanceTasks)
 	taskID := ""
 	if c.Request.Method != http.MethodPost {
-		taskID = service.SeedanceTaskKey(c.Param("task_id"))
+		taskID = c.Param("task_id")
+		if !strings.HasPrefix(taskID, "tokenhub-video:") {
+			taskID = service.SeedanceTaskKey(taskID)
+		}
 		endpoint = service.SeedanceEndpointStatus
 		if c.Request.Method == http.MethodDelete {
 			endpoint = service.SeedanceEndpointDelete

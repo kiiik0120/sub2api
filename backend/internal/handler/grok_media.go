@@ -56,7 +56,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	noAccountCode, noAccountMessage := "grok_media_no_eligible_account", "No eligible Grok media accounts"
 	if endpoint.IsSeedance() {
 		platform = service.PlatformOpenAI
-		noAccountCode, noAccountMessage = "seedance_no_eligible_account", "No eligible Seedance accounts"
+		noAccountCode, noAccountMessage = "ark_video_no_eligible_account", "No eligible Ark video accounts"
 	}
 	streamStarted := false
 	defer h.recoverResponsesPanic(c, &streamStarted)
@@ -172,6 +172,18 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		h.errorResponse(c, status, code, message)
 		return
 	}
+
+	// 余额模式在途预留（与计费同口径估算；计费任务扣减余额缓存后才释放）。
+	inflightDone, inflightErr := reserveInflightBalance(c, h.billingCacheService, h.gatewayService, apiKey, subscription, grokMediaInflightEstimate(endpoint, routingModel, requestInfo, body))
+	if inflightErr != nil {
+		status, code, message, retryAfter := billingErrorDetails(inflightErr)
+		if retryAfter > 0 {
+			c.Header("Retry-After", strconv.Itoa(retryAfter))
+		}
+		h.errorResponse(c, status, code, message)
+		return
+	}
+	defer inflightDone()
 
 	sessionSeed := body
 	if len(sessionSeed) == 0 && strings.TrimSpace(requestID) != "" {
@@ -374,6 +386,9 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer releaseAccount()
 			if endpoint.IsSeedance() {
+				if account.SupportsOpenAIEndpointCapability(service.OpenAIEndpointCapabilityTokenHubVideo) {
+					return h.gatewayService.ForwardTokenHubVideo(requestCtx, c, account, endpoint, requestID, body)
+				}
 				return h.gatewayService.ForwardSeedance(requestCtx, c, account, endpoint, requestID, body)
 			}
 			return h.gatewayService.ForwardGrokMedia(requestCtx, c, account, endpoint, requestID, body, contentType)
@@ -543,7 +558,7 @@ func (h *OpenAIGatewayHandler) ensureGrokMediaAccountEligibility(ctx context.Con
 
 func grokMediaRequiredCapability(endpoint service.GrokMediaEndpoint) service.OpenAIEndpointCapability {
 	if endpoint.IsSeedance() {
-		return service.OpenAIEndpointCapabilitySeedance
+		return service.OpenAIEndpointCapabilityArkVideo
 	}
 	if endpoint.IsGenerationRequest() {
 		return service.OpenAIEndpointCapabilityGrokMediaGeneration
@@ -736,7 +751,7 @@ func recordGrokMediaUsage(
 	}
 	// Async video: force durable task request id and release claim if billing fails.
 	videoTaskID := ""
-	if result != nil && (result.VideoCount > 0 || strings.HasPrefix(result.ResponseID, "seedance:")) {
+	if result != nil && (result.VideoCount > 0 || strings.HasPrefix(result.ResponseID, "seedance:") || strings.HasPrefix(result.ResponseID, "tokenhub-video:")) {
 		videoTaskID = strings.TrimSpace(firstNonEmptyString(requestID, result.ResponseID))
 		if stable := service.StableGrokVideoBillingRequestID(firstNonEmptyString(result.ResponseID, requestID)); stable != "" {
 			result.RequestID = stable

@@ -43,6 +43,7 @@ type UsageBillingCommand struct {
 	TotalCost             float64
 	RateMultiplier        float64
 	AccountRateMultiplier float64
+	LocalUsageLog         *UsageLog
 
 	BalanceCost         float64
 	SubscriptionCost    float64
@@ -50,10 +51,10 @@ type UsageBillingCommand struct {
 	APIKeyRateLimitCost float64
 	AccountQuotaCost    float64
 
-	// LocalUsageLog is persisted in the billing transaction when the repository
-	// is configured with a transactional usage-log writer. Keeping the full log
-	// here avoids rebuilding the many usage_logs columns in the billing layer.
-	LocalUsageLog *UsageLog
+	// AccountQuotaHasDailyLimit / AccountQuotaHasWeeklyLimit 记录构造命令时账号是否设置了日/周上限，
+	// 只用于选择账号配额累加语句，不参与幂等指纹；实际累加哪些维度以数据库中的账号配置为准。
+	AccountQuotaHasDailyLimit  bool
+	AccountQuotaHasWeeklyLimit bool
 }
 
 func (c *UsageBillingCommand) Normalize() {
