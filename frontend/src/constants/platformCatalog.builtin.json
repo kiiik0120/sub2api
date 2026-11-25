@@ -42,6 +42,12 @@
       "cn_provider": false
     },
     {
+      "id": "ark_multimodal",
+      "display_name": "火山多模态向量",
+      "gateway": "openai",
+      "cn_provider": false
+    },
+    {
       "id": "kimi",
       "display_name": "Kimi",
       "gateway": "openai",
@@ -293,6 +299,7 @@
     "antigravity",
     "grok",
     "heygen",
+    "ark_multimodal",
     "kimi",
     "zhipu",
     "deepseek",

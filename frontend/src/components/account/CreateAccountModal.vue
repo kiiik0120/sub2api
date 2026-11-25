@@ -176,6 +176,20 @@
           </button>
           <button
             type="button"
+            data-testid="platform-button-ark_multimodal"
+            @click="form.platform = 'ark_multimodal'"
+            :class="[
+              'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all',
+              form.platform === 'ark_multimodal'
+                ? 'bg-white text-primary-600 shadow-sm dark:bg-dark-600 dark:text-primary-400'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
+            ]"
+          >
+            <Icon name="key" size="sm" />
+            火山多模态向量
+          </button>
+          <button
+            type="button"
             @click="selectTypeSafePlatform()"
             :class="[
               'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all',
@@ -529,7 +543,10 @@
       </div>
 
       <!-- OpenCode Zen vs Go -->
-      <div v-if="form.platform === 'heygen'" data-testid="heygen-account-type">
+      <div
+        v-if="form.platform === 'heygen' || form.platform === 'ark_multimodal'"
+        :data-testid="form.platform === 'heygen' ? 'heygen-account-type' : 'ark-multimodal-account-type'"
+      >
         <label class="input-label">{{ t('admin.accounts.accountType') }}</label>
         <div class="rounded-lg border-2 border-purple-500 bg-purple-50 p-3 text-sm font-medium dark:bg-purple-900/20">
           API Key
@@ -4278,7 +4295,7 @@ const withUpstreamRequestIdHeader = <T extends Record<string, unknown> | undefin
 const baseUrlHint = computed(() => {
   if (form.platform === 'openai') return t('admin.accounts.openai.baseUrlHint')
   if (form.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')
-  if (form.platform === 'grok' || form.platform === 'heygen') return ''
+  if (form.platform === 'grok' || form.platform === 'heygen' || form.platform === 'ark_multimodal') return ''
   return t('admin.accounts.baseUrlHint')
 })
 
@@ -4286,7 +4303,7 @@ const apiKeyHint = computed(() => {
   if (form.platform === 'openai') return t('admin.accounts.openai.apiKeyHint')
   if (form.platform === 'gemini') return t('admin.accounts.gemini.apiKeyHint')
   // Grok 与多协议供应商没有对应的说明文案；通用文案指 Claude Console Key。
-  if (form.platform === 'grok' || form.platform === 'heygen' || isMultiProtocolPlatform.value) return ''
+  if (form.platform === 'grok' || form.platform === 'heygen' || form.platform === 'ark_multimodal' || isMultiProtocolPlatform.value) return ''
   return t('admin.accounts.apiKeyHint')
 })
 
@@ -4303,6 +4320,8 @@ const apiKeyBaseUrlPlaceholder = computed(() => {
       return 'https://generativelanguage.googleapis.com'
     case 'grok':
       return 'https://api.x.ai/v1'
+    case 'ark_multimodal':
+      return 'https://ark.cn-beijing.volces.com/api/v3'
     case 'heygen':
       return 'https://api.heygen.com/v3'
     case 'typesafe':
@@ -4320,6 +4339,8 @@ const apiKeyValuePlaceholder = computed(() => {
       return 'AQ.Ab...'
     case 'grok':
       return 'xai-...'
+    case 'ark_multimodal':
+      return 'Ark API Key'
     case 'heygen':
       return 'HeyGen API Key'
     case 'kimi':
@@ -5202,6 +5223,8 @@ watch(
             ? 'https://generativelanguage.googleapis.com'
             : newPlatform === 'grok'
               ? 'https://api.x.ai/v1'
+              : newPlatform === 'ark_multimodal'
+                ? 'https://ark.cn-beijing.volces.com/api/v3'
               : newPlatform === 'heygen'
                 ? 'https://api.heygen.com/v3'
               : newPlatform === 'typesafe'
@@ -5246,6 +5269,12 @@ watch(
     }
     if (newPlatform !== 'anthropic' && accountCategory.value === 'bedrock') {
       accountCategory.value = 'oauth-based'
+    }
+    if (newPlatform === 'ark_multimodal') {
+      accountCategory.value = 'apikey'
+      modelRestrictionMode.value = 'whitelist'
+      allowedModels.value = ['doubao-embedding-vision-251215']
+      upstreamBillingAutoProbeEnabled.value = false
     }
     if (newPlatform === 'heygen') {
       accountCategory.value = 'apikey'
@@ -6177,6 +6206,8 @@ const handleSubmit = async () => {
         ? 'https://generativelanguage.googleapis.com'
         : form.platform === 'grok'
           ? 'https://api.x.ai/v1'
+          : form.platform === 'ark_multimodal'
+            ? 'https://ark.cn-beijing.volces.com/api/v3'
           : form.platform === 'heygen'
             ? 'https://api.heygen.com/v3'
           : form.platform === 'typesafe'

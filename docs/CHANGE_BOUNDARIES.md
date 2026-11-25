@@ -160,3 +160,28 @@ git diff aea725f2ea644d5592d0bbb1d63b607efa7e200a -- path/to/file
 ```
 
 本次新增的 `docs/CHANGE_BOUNDARIES.md` 与 `docs/CHANGE_BOUNDARIES_FILES.tsv` 属于本地维护文档，未计入上述整理前快照的 4013 个文件；本次只新增两份清单文档，业务代码无修改。
+
+
+## 2026-11-24 火山多模态向量专用接入
+
+本次基于 `213b2ea0f` 新增 `ark_multimodal` 专用平台。范围限定原生
+`/embeddings/multimodal`；不改 OpenAI embeddings handler/forwarder，不扩展火山聊天、
+生图、视频或异步任务。使用 Git `origin/main` 与本分支历史确认：平台注册、路由、
+端点归一化、Composite 识别、前端账号表单及对应原有测试均属于原源码接入修改。
+
+独立新增的 handler/service 从上游 embeddings 生命周期与转发骨架派生，文件头保留来源；
+其中火山平台与协议校验、官方基址、原生响应及用量校验属于本地扩展，不能把复用骨架
+认定为完全独立原创。专用路由限制、新增测试及说明为自研新增维护范围。
+
+逐文件边界见 [ARK_MULTIMODAL_CHANGE_BOUNDARIES.md](../ARK_MULTIMODAL_CHANGE_BOUNDARIES.md)，
+配置和验证见 [火山多模态向量说明](../ARK_MULTIMODAL_EMBEDDINGS_CN.md)。上文旧快照和旧 TSV
+统计保持其历史含义；本补充不重写旧统计。数据库迁移、通用计费、Kox、Docker 和已有账号数据
+均未修改。真实 Key 仅用于进程内联调，未写入仓库。
+
+
+2026-11-25 合并维护收敛：原项目源码修改从 16 个已有文件减到 11 个（含测试及前端清单）。
+后端已有生产文件仅保留平台注册 1 行、Composite 模型识别 2 行、公共路由扩展挂载 5 行。
+原 domain/service 常量文件、公共端点文件及两份公共路由测试已恢复，逻辑迁入新增扩展文件。
+账号、原生 OpenAI 转发、公共扣费事务、数据库和部署配置均不在此次收敛修改范围。
+详见根目录 `ARK_MULTIMODAL_CHANGE_BOUNDARIES.md`；仍存在公共入口平台判断及上游 helper 依赖，
+后续升级需要回归验证，不能承诺零合并冲突。

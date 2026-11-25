@@ -219,6 +219,26 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
 
   afterEach(() => vi.useRealTimers())
 
+  it('creates a dedicated Ark multimodal API-key account', async () => {
+    const wrapper = mountModal()
+    await wrapper.get('[data-testid="platform-button-ark_multimodal"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.findComponent(OAuthAuthorizationFlowStub).exists()).toBe(false)
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Ark multimodal test')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-ark-key')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(createAccountMock).toHaveBeenCalledWith(expect.objectContaining({
+      platform: 'ark_multimodal', type: 'apikey', upstream_billing_probe_enabled: false,
+      credentials: expect.objectContaining({
+        base_url: 'https://ark.cn-beijing.volces.com/api/v3', api_key: 'test-ark-key',
+        model_mapping: { 'doubao-embedding-vision-251215': 'doubao-embedding-vision-251215' }
+      })
+    }))
+    expect(probeUpstreamBillingMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('creates a HeyGen API-key account with the native base URL and video model', async () => {
     const wrapper = mountModal()
     await wrapper.get('[data-testid="platform-button-heygen"]').trigger('click')

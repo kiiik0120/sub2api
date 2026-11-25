@@ -496,6 +496,7 @@ export const commonErrorCodes = [
 // 按平台获取模型
 export function getModelsByPlatform(platform: string): string[] {
   switch (platform) {
+    case 'ark_multimodal': return ['doubao-embedding-vision-251215']
     case 'heygen': return ['heygen-avatar-video']
     case 'openai': return openaiModels
     case 'anthropic':

@@ -124,6 +124,8 @@ func DetectModelPlatform(model string) (string, bool) {
 	}
 
 	switch {
+	case normalized == ArkMultimodalEmbeddingModel:
+		return PlatformArkMultimodal, true
 	case normalized == HeyGenVideoModel:
 		return PlatformHeyGen, true
 	case normalized == MediaKitASRModel, normalized == "minimax-voice-clone", isTokenHubMiniMaxTTSModel(normalized):
