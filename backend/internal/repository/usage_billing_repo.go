@@ -9,8 +9,10 @@ import (
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/koxbilling"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/google/uuid"
 )
 
 type usageBillingRepository struct {
@@ -91,15 +93,23 @@ func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBi
 	if koxCost <= 0 {
 		koxCost = cmd.BalanceCost
 	}
-	if r.koxBilling != nil && koxCost > 0 {
+	if r.koxBilling != nil && cmd.LocalUsageLog != nil {
+		externalCallID := strings.TrimPrefix(cmd.RequestID, "client:")
+		if candidate, _ := ctx.Value(ctxkey.ClientRequestID).(string); candidate != "" {
+			if _, err := uuid.Parse(candidate); err == nil {
+				externalCallID = candidate
+			}
+		}
 		_, err := r.koxBilling.RecordGatewayUsageTx(ctx, tx, cmd.APIKeyID, koxbilling.GatewayUsageInput{
 			ProviderRequestID: cmd.RequestID,
 			RequestID:         cmd.RequestID,
-			ReservationID:     "sub2api:" + cmd.RequestID,
-			BusinessCode:      "gateway.usage",
+			ExternalCallID:    externalCallID,
+			ReservationID:     "accounting:" + externalCallID,
+			BusinessCode:      "ai.resource",
 			Model:             cmd.Model,
 			BillingType:       koxBillingTypeName(cmd.BillingType, cmd.BillingMode),
 			ActualCost:        koxCost,
+			ListCost:          cmd.TotalCost,
 			InputTokens:       cmd.InputTokens,
 			OutputTokens:      cmd.OutputTokens,
 			CacheReadTokens:   cmd.CacheReadTokens,

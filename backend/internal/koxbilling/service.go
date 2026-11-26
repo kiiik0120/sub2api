@@ -24,11 +24,13 @@ import (
 )
 
 const (
-	internalAPIKeyEnv = "KOX_BILLING_INTERNAL_API_KEY"
-	webhookSecretEnv  = "SUB2API_WEBHOOK_SECRET"
-	webhookURLEnv     = "SUB2API_WEBHOOK_URL"
-	gatewayUserIDEnv  = "KOX_GATEWAY_USER_ID"
-	gatewayGroupIDEnv = "KOX_GATEWAY_GROUP_ID"
+	internalAPIKeyEnv          = "KOX_BILLING_INTERNAL_API_KEY"
+	webhookSecretEnv           = "SUB2API_WEBHOOK_SECRET"
+	webhookURLEnv              = "SUB2API_WEBHOOK_URL"
+	accountingWebhookSecretEnv = "SUB2API_ACCOUNTING_WEBHOOK_SECRET"
+	accountingWebhookURLEnv    = "SUB2API_ACCOUNTING_WEBHOOK_URL"
+	gatewayUserIDEnv           = "KOX_GATEWAY_USER_ID"
+	gatewayGroupIDEnv          = "KOX_GATEWAY_GROUP_ID"
 
 	koxOutboxBatchSize     = 20
 	koxOutboxPollInterval  = 5 * time.Second
@@ -39,11 +41,12 @@ const (
 )
 
 type Service struct {
-	db                                     *sql.DB
-	internalKey, webhookSecret, webhookURL string
-	gatewayUserID, gatewayGroupID          int64
-	workerID                               string
-	client                                 *http.Client
+	db                                            *sql.DB
+	internalKey, webhookSecret, webhookURL        string
+	accountingWebhookSecret, accountingWebhookURL string
+	gatewayUserID, gatewayGroupID                 int64
+	workerID                                      string
+	client                                        *http.Client
 }
 type CreateKeyInput struct {
 	KoxCompanyID string `json:"kox_company_id"`
@@ -58,6 +61,7 @@ type UsageInput struct {
 	Model             string         `json:"model"`
 	BillingType       string         `json:"billing_type"`
 	ActualCost        string         `json:"actual_cost"`
+	ListCost          string         `json:"list_cost"`
 	Currency          string         `json:"currency"`
 	Status            string         `json:"status"`
 	InputTokens       int            `json:"input_tokens"`
@@ -73,11 +77,13 @@ type UsageInput struct {
 type GatewayUsageInput struct {
 	ProviderRequestID string
 	RequestID         string
+	ExternalCallID    string
 	ReservationID     string
 	BusinessCode      string
 	Model             string
 	BillingType       string
 	ActualCost        float64
+	ListCost          float64
 	Currency          string
 	Status            string
 	InputTokens       int
@@ -110,7 +116,25 @@ type Usage struct {
 func New(db *sql.DB) *Service {
 	userID, _ := strconv.ParseInt(strings.TrimSpace(os.Getenv(gatewayUserIDEnv)), 10, 64)
 	groupID, _ := strconv.ParseInt(strings.TrimSpace(os.Getenv(gatewayGroupIDEnv)), 10, 64)
-	return &Service{db: db, internalKey: strings.TrimSpace(os.Getenv(internalAPIKeyEnv)), webhookSecret: strings.TrimSpace(os.Getenv(webhookSecretEnv)), webhookURL: strings.TrimSpace(os.Getenv(webhookURLEnv)), gatewayUserID: userID, gatewayGroupID: groupID, workerID: uuid.NewString(), client: &http.Client{Timeout: koxWebhookTimeout}}
+	return &Service{
+		db:                      db,
+		internalKey:             strings.TrimSpace(os.Getenv(internalAPIKeyEnv)),
+		webhookSecret:           strings.TrimSpace(os.Getenv(webhookSecretEnv)),
+		webhookURL:              strings.TrimSpace(os.Getenv(webhookURLEnv)),
+		accountingWebhookSecret: strings.TrimSpace(os.Getenv(accountingWebhookSecretEnv)),
+		accountingWebhookURL:    strings.TrimSpace(os.Getenv(accountingWebhookURLEnv)),
+		gatewayUserID:           userID,
+		gatewayGroupID:          groupID,
+		workerID:                uuid.NewString(),
+		client:                  &http.Client{Timeout: koxWebhookTimeout},
+	}
+}
+
+func (s *Service) accountingDeliveryStatus() string {
+	if s != nil && s.accountingWebhookURL != "" && s.accountingWebhookSecret != "" {
+		return "pending"
+	}
+	return "disabled"
 }
 
 func (s *Service) Enabled() bool {
@@ -303,13 +327,17 @@ func (s *Service) RecordUsage(ctx context.Context, in UsageInput) (string, error
 	if err != nil {
 		return "", err
 	}
-	payload := map[string]any{"event_id": uuid.NewString(), "usage_log_id": usageID, "revision": revision, "reservation_id": in.ReservationID, "external_call_id": in.RequestID, "api_key_id": in.APIKeyID, "business_code": in.BusinessCode, "model": in.Model, "billing_type": in.BillingType, "input_tokens": in.InputTokens, "output_tokens": in.OutputTokens, "cache_read_tokens": in.CacheReadTokens, "cache_write_tokens": in.CacheWriteTokens, "actual_cost": in.ActualCost, "currency": in.Currency, "status": in.Status, "occurred_at": in.OccurredAt.UTC().Format(time.RFC3339Nano), "metadata": in.Metadata}
+	listCost := strings.TrimSpace(in.ListCost)
+	if listCost == "" {
+		listCost = in.ActualCost
+	}
+	payload := map[string]any{"event_id": uuid.NewString(), "usage_log_id": usageID, "revision": revision, "reservation_id": in.ReservationID, "external_call_id": in.RequestID, "api_key_id": in.APIKeyID, "business_code": in.BusinessCode, "model": in.Model, "billing_type": in.BillingType, "input_tokens": in.InputTokens, "output_tokens": in.OutputTokens, "cache_read_tokens": in.CacheReadTokens, "cache_write_tokens": in.CacheWriteTokens, "list_cost": listCost, "actual_cost": in.ActualCost, "currency": in.Currency, "status": in.Status, "occurred_at": in.OccurredAt.UTC().Format(time.RFC3339Nano), "metadata": in.Metadata}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
 	}
 	eventID := payload["event_id"].(string)
-	_, err = tx.ExecContext(ctx, `INSERT INTO kox_billing_outbox(event_id,usage_log_id,revision,payload) VALUES($1,$2,$3,$4)`, eventID, usageID, revision, raw)
+	_, err = tx.ExecContext(ctx, `INSERT INTO kox_billing_outbox(event_id,usage_log_id,revision,payload,accounting_delivery_status) VALUES($1,$2,$3,$4,$5)`, eventID, usageID, revision, raw, s.accountingDeliveryStatus())
 	if err != nil {
 		return "", err
 	}
@@ -322,7 +350,7 @@ func (s *Service) RecordUsage(ctx context.Context, in UsageInput) (string, error
 // RecordGatewayUsageTx records usage for a native gateway API key in the
 // caller's transaction. Non-Kox keys are deliberately a no-op.
 func (s *Service) RecordGatewayUsageTx(ctx context.Context, tx *sql.Tx, gatewayAPIKeyID int64, in GatewayUsageInput) (bool, error) {
-	if s == nil || tx == nil || in.ActualCost <= 0 {
+	if s == nil || tx == nil {
 		return false, nil
 	}
 	var koxAPIKeyID string
@@ -366,6 +394,9 @@ func (s *Service) RecordGatewayUsageTx(ctx context.Context, tx *sql.Tx, gatewayA
 	if strings.TrimSpace(in.BillingType) == "" {
 		in.BillingType = "token"
 	}
+	if strings.TrimSpace(in.ExternalCallID) == "" {
+		in.ExternalCallID = in.RequestID
+	}
 
 	var usageID string
 	var revision int
@@ -373,20 +404,20 @@ func (s *Service) RecordGatewayUsageTx(ctx context.Context, tx *sql.Tx, gatewayA
 	if errors.Is(err, sql.ErrNoRows) {
 		usageID = uuid.NewString()
 		revision = 1
-		_, err = tx.ExecContext(ctx, `INSERT INTO kox_usage_logs(usage_log_id,api_key_id,provider_request_id,request_id,reservation_id,business_code,model,billing_type,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,actual_cost,currency,status,occurred_at,revision,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`, usageID, koxAPIKeyID, in.ProviderRequestID, in.RequestID, in.ReservationID, in.BusinessCode, in.Model, in.BillingType, in.InputTokens, in.OutputTokens, in.CacheReadTokens, in.CacheWriteTokens, in.ActualCost, in.Currency, in.Status, time.Now().UTC(), revision, metadataJSON)
+		_, err = tx.ExecContext(ctx, `INSERT INTO kox_usage_logs(usage_log_id,api_key_id,provider_request_id,request_id,reservation_id,business_code,model,billing_type,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,actual_cost,currency,status,occurred_at,revision,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`, usageID, koxAPIKeyID, in.ProviderRequestID, in.ExternalCallID, in.ReservationID, in.BusinessCode, in.Model, in.BillingType, in.InputTokens, in.OutputTokens, in.CacheReadTokens, in.CacheWriteTokens, in.ActualCost, in.Currency, in.Status, time.Now().UTC(), revision, metadataJSON)
 	} else if err == nil {
 		revision++
-		_, err = tx.ExecContext(ctx, `UPDATE kox_usage_logs SET request_id=$2,reservation_id=$3,business_code=$4,model=$5,billing_type=$6,input_tokens=$7,output_tokens=$8,cache_read_tokens=$9,cache_write_tokens=$10,actual_cost=$11,currency=$12,status=$13,occurred_at=$14,revision=$15,metadata=$16,updated_at=NOW() WHERE usage_log_id=$1`, usageID, in.RequestID, in.ReservationID, in.BusinessCode, in.Model, in.BillingType, in.InputTokens, in.OutputTokens, in.CacheReadTokens, in.CacheWriteTokens, in.ActualCost, in.Currency, in.Status, time.Now().UTC(), revision, metadataJSON)
+		_, err = tx.ExecContext(ctx, `UPDATE kox_usage_logs SET request_id=$2,reservation_id=$3,business_code=$4,model=$5,billing_type=$6,input_tokens=$7,output_tokens=$8,cache_read_tokens=$9,cache_write_tokens=$10,actual_cost=$11,currency=$12,status=$13,occurred_at=$14,revision=$15,metadata=$16,updated_at=NOW() WHERE usage_log_id=$1`, usageID, in.ExternalCallID, in.ReservationID, in.BusinessCode, in.Model, in.BillingType, in.InputTokens, in.OutputTokens, in.CacheReadTokens, in.CacheWriteTokens, in.ActualCost, in.Currency, in.Status, time.Now().UTC(), revision, metadataJSON)
 	}
 	if err != nil {
 		return false, err
 	}
-	payload := map[string]any{"event_id": uuid.NewString(), "usage_log_id": usageID, "revision": revision, "reservation_id": in.ReservationID, "external_call_id": in.RequestID, "api_key_id": koxAPIKeyID, "business_code": in.BusinessCode, "model": in.Model, "billing_type": in.BillingType, "input_tokens": in.InputTokens, "output_tokens": in.OutputTokens, "cache_read_tokens": in.CacheReadTokens, "cache_write_tokens": in.CacheWriteTokens, "actual_cost": fmt.Sprintf("%.12f", in.ActualCost), "currency": in.Currency, "status": in.Status, "occurred_at": time.Now().UTC().Format(time.RFC3339Nano), "metadata": in.Metadata}
+	payload := map[string]any{"event_id": uuid.NewString(), "usage_log_id": usageID, "revision": revision, "reservation_id": in.ReservationID, "external_call_id": in.ExternalCallID, "api_key_id": koxAPIKeyID, "business_code": in.BusinessCode, "model": in.Model, "billing_type": in.BillingType, "input_tokens": in.InputTokens, "output_tokens": in.OutputTokens, "cache_read_tokens": in.CacheReadTokens, "cache_write_tokens": in.CacheWriteTokens, "list_cost": fmt.Sprintf("%.12f", in.ListCost), "actual_cost": fmt.Sprintf("%.12f", in.ActualCost), "currency": in.Currency, "status": in.Status, "occurred_at": time.Now().UTC().Format(time.RFC3339Nano), "metadata": in.Metadata}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return false, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO kox_billing_outbox(event_id,usage_log_id,revision,payload) VALUES($1,$2,$3,$4)`, payload["event_id"], usageID, revision, raw)
+	_, err = tx.ExecContext(ctx, `INSERT INTO kox_billing_outbox(event_id,usage_log_id,revision,payload,accounting_delivery_status) VALUES($1,$2,$3,$4,$5)`, payload["event_id"], usageID, revision, raw, s.accountingDeliveryStatus())
 	if err != nil {
 		return false, err
 	}
@@ -496,6 +527,112 @@ func (s *Service) deliver(ctx context.Context, id string, raw []byte, attempts i
 	return s.updateDelivery(ctx, `UPDATE kox_billing_outbox SET attempts=attempts+1,first_attempted_at=COALESCE(first_attempted_at,NOW()),last_attempted_at=NOW(),next_attempt_at=NOW()+($2 * INTERVAL '1 second'),last_error=$3,claimed_at=NULL,claimed_by=NULL WHERE event_id=$1 AND claimed_by=$4`, id, int(delay.Seconds()), errorText(err), s.workerID)
 }
 
+// DeliverAccountingDue delivers the optional shadow copy to the accounting
+// service. It owns a completely separate set of claim and retry columns, so a
+// slow or unavailable accounting service cannot delay or mutate legacy webhook
+// delivery state.
+func (s *Service) DeliverAccountingDue(ctx context.Context, limit int) error {
+	if s.accountingWebhookURL == "" || s.accountingWebhookSecret == "" {
+		return nil
+	}
+	if limit < 1 || limit > koxOutboxBatchSize {
+		limit = koxOutboxBatchSize
+	}
+	claimCtx, cancel := context.WithTimeout(ctx, koxOutboxClaimTimeout)
+	defer cancel()
+	rows, err := s.db.QueryContext(claimCtx, `
+		WITH candidates AS MATERIALIZED (
+			SELECT event_id
+			FROM kox_billing_outbox
+			WHERE accounting_delivery_status = 'pending'
+			  AND accounting_next_attempt_at <= NOW()
+			  AND (accounting_claimed_at IS NULL OR accounting_claimed_at < NOW() - ($3 * INTERVAL '1 second'))
+			ORDER BY created_at
+			LIMIT $2
+			FOR UPDATE SKIP LOCKED
+		), claimed AS (
+			UPDATE kox_billing_outbox AS o
+			SET accounting_claimed_at = NOW(), accounting_claimed_by = $1
+			FROM candidates AS c
+			WHERE o.event_id = c.event_id
+			RETURNING o.event_id, o.payload, o.accounting_attempts
+		)
+		SELECT event_id, payload, accounting_attempts FROM claimed`, s.workerID, limit, int(koxOutboxClaimLease.Seconds()))
+	if err != nil {
+		return err
+	}
+	type claimedEvent struct {
+		id       string
+		payload  []byte
+		attempts int
+	}
+	events := make([]claimedEvent, 0, limit)
+	for rows.Next() {
+		var event claimedEvent
+		if err := rows.Scan(&event.id, &event.payload, &event.attempts); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	var deliveryErrs []error
+	for _, event := range events {
+		if err := s.deliverAccounting(ctx, event.id, event.payload, event.attempts); err != nil {
+			deliveryErrs = append(deliveryErrs, fmt.Errorf("deliver accounting outbox event %s: %w", event.id, err))
+		}
+	}
+	return errors.Join(deliveryErrs...)
+}
+
+func (s *Service) deliverAccounting(ctx context.Context, id string, raw []byte, attempts int) error {
+	deliveryCtx, cancel := context.WithTimeout(ctx, koxWebhookTimeout)
+	defer cancel()
+	timestamp := fmt.Sprint(time.Now().UTC().Unix())
+	mac := hmac.New(sha256.New, []byte(s.accountingWebhookSecret))
+	_, _ = mac.Write([]byte(timestamp + "."))
+	_, _ = mac.Write(raw)
+	req, err := http.NewRequestWithContext(deliveryCtx, http.MethodPost, s.accountingWebhookURL, bytes.NewReader(raw))
+	if err == nil {
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Sub2API-Timestamp", timestamp)
+		req.Header.Set("X-Sub2API-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+		var resp *http.Response
+		resp, err = s.client.Do(req)
+		if resp != nil {
+			body, readErr := readWebhookResponse(resp.Body)
+			if err == nil && readErr != nil {
+				err = fmt.Errorf("read accounting webhook response: %w", readErr)
+			}
+			if err == nil {
+				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+					slog.Info("accounting shadow webhook delivered", "event_id", id, "attempts", attempts+1, "status", resp.StatusCode)
+					return s.updateDelivery(ctx, `UPDATE kox_billing_outbox SET accounting_delivery_status='delivered',accounting_attempts=accounting_attempts+1,accounting_first_attempted_at=COALESCE(accounting_first_attempted_at,NOW()),accounting_last_attempted_at=NOW(),accounting_completed_at=NOW(),accounting_last_response=$2,accounting_claimed_at=NULL,accounting_claimed_by=NULL WHERE event_id=$1 AND accounting_claimed_by=$3`, id, body, s.workerID)
+				}
+				if resp.StatusCode == http.StatusUnauthorized {
+					slog.Warn("accounting shadow webhook blocked", "event_id", id, "attempts", attempts+1, "status", resp.StatusCode)
+					return s.updateDelivery(ctx, `UPDATE kox_billing_outbox SET accounting_delivery_status='blocked',accounting_attempts=accounting_attempts+1,accounting_last_error=$2,accounting_last_response=$3,accounting_last_attempted_at=NOW(),accounting_claimed_at=NULL,accounting_claimed_by=NULL WHERE event_id=$1 AND accounting_claimed_by=$4`, id, "webhook returned 401", body, s.workerID)
+				}
+				if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+					slog.Warn("accounting shadow webhook dead-lettered", "event_id", id, "attempts", attempts+1, "status", resp.StatusCode)
+					return s.updateDelivery(ctx, `UPDATE kox_billing_outbox SET accounting_delivery_status='dead_letter',accounting_attempts=accounting_attempts+1,accounting_last_error=$2,accounting_last_response=$3,accounting_last_attempted_at=NOW(),accounting_claimed_at=NULL,accounting_claimed_by=NULL WHERE event_id=$1 AND accounting_claimed_by=$4`, id, fmt.Sprintf("webhook returned %d", resp.StatusCode), body, s.workerID)
+				}
+				err = fmt.Errorf("webhook returned %d", resp.StatusCode)
+			}
+		}
+	}
+	delay := time.Duration(1<<min(attempts, 8)) * time.Second
+	slog.Warn("accounting shadow webhook retry scheduled", "event_id", id, "attempts", attempts+1, "retry_after_seconds", int(delay.Seconds()), "error", err)
+	return s.updateDelivery(ctx, `UPDATE kox_billing_outbox SET accounting_attempts=accounting_attempts+1,accounting_first_attempted_at=COALESCE(accounting_first_attempted_at,NOW()),accounting_last_attempted_at=NOW(),accounting_next_attempt_at=NOW()+($2 * INTERVAL '1 second'),accounting_last_error=$3,accounting_claimed_at=NULL,accounting_claimed_by=NULL WHERE event_id=$1 AND accounting_claimed_by=$4`, id, int(delay.Seconds()), errorText(err), s.workerID)
+}
+
 func readWebhookResponse(body io.ReadCloser) (string, error) {
 	defer body.Close()
 	response, err := io.ReadAll(io.LimitReader(body, 4096))
@@ -516,6 +653,11 @@ func (s *Service) updateDelivery(ctx context.Context, query string, args ...any)
 }
 func (s *Service) Replay(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE kox_billing_outbox SET delivery_status='pending',next_attempt_at=NOW(),last_error=NULL,claimed_at=NULL,claimed_by=NULL WHERE event_id=$1 AND delivery_status IN ('dead_letter','blocked')`, id)
+	return err
+}
+
+func (s *Service) ReplayAccounting(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE kox_billing_outbox SET accounting_delivery_status='pending',accounting_next_attempt_at=NOW(),accounting_last_error=NULL,accounting_claimed_at=NULL,accounting_claimed_by=NULL WHERE event_id=$1 AND accounting_delivery_status IN ('dead_letter','blocked')`, id)
 	return err
 }
 func (s *Service) Usage(ctx context.Context, requestID, apiKeyID string, from, to time.Time) ([]Usage, error) {
@@ -554,23 +696,30 @@ func (s *Service) Usage(ctx context.Context, requestID, apiKeyID string, from, t
 	return out, rows.Err()
 }
 func (s *Service) Start(ctx context.Context) {
-	if !s.Enabled() || s.webhookURL == "" || s.webhookSecret == "" {
+	if !s.Enabled() {
 		return
 	}
-	go func() {
-		t := time.NewTicker(koxOutboxPollInterval)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				if err := s.DeliverDue(ctx, koxOutboxBatchSize); err != nil && ctx.Err() == nil {
-					slog.Error("kox billing outbox delivery failed", "error", err)
-				}
+	if s.webhookURL != "" && s.webhookSecret != "" {
+		go s.runDeliveryWorker(ctx, "legacy", s.DeliverDue)
+	}
+	if s.accountingWebhookURL != "" && s.accountingWebhookSecret != "" {
+		go s.runDeliveryWorker(ctx, "accounting", s.DeliverAccountingDue)
+	}
+}
+
+func (s *Service) runDeliveryWorker(ctx context.Context, destination string, deliver func(context.Context, int) error) {
+	t := time.NewTicker(koxOutboxPollInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := deliver(ctx, koxOutboxBatchSize); err != nil && ctx.Err() == nil {
+				slog.Error("kox billing outbox delivery failed", "destination", destination, "error", err)
 			}
 		}
-	}()
+	}
 }
 func randomKey() (string, error) {
 	b := make([]byte, 32)

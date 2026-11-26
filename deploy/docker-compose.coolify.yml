@@ -80,6 +80,8 @@ services:
       - 'KOX_GATEWAY_GROUP_ID=${KOX_GATEWAY_GROUP_ID:?KOX_GATEWAY_GROUP_ID is required}'
       - 'SUB2API_WEBHOOK_URL=${SUB2API_WEBHOOK_URL:?SUB2API_WEBHOOK_URL is required}'
       - 'SUB2API_WEBHOOK_SECRET=${SUB2API_WEBHOOK_SECRET:?SUB2API_WEBHOOK_SECRET is required}'
+      - 'SUB2API_ACCOUNTING_WEBHOOK_URL=${SUB2API_ACCOUNTING_WEBHOOK_URL:-}'
+      - 'SUB2API_ACCOUNTING_WEBHOOK_SECRET=${SUB2API_ACCOUNTING_WEBHOOK_SECRET:-}'
     healthcheck:
       test: ['CMD', 'wget', '-q', '-T', '5', '-O', '/dev/null', 'http://localhost:8080/health']
       interval: 30s
