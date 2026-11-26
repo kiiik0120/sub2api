@@ -165,6 +165,8 @@ services:
       - KOX_GATEWAY_GROUP_ID=${KOX_GATEWAY_GROUP_ID:-}
       - SUB2API_WEBHOOK_URL=${SUB2API_WEBHOOK_URL:-}
       - SUB2API_WEBHOOK_SECRET=${SUB2API_WEBHOOK_SECRET:-}
+      - SUB2API_ACCOUNTING_WEBHOOK_URL=${SUB2API_ACCOUNTING_WEBHOOK_URL:-}
+      - SUB2API_ACCOUNTING_WEBHOOK_SECRET=${SUB2API_ACCOUNTING_WEBHOOK_SECRET:-}
 
       # =======================================================================
       # Gateway Upstream, Scheduling & Image Configuration
